@@ -19,6 +19,7 @@ class InfluencerDB:
         key: Supabase anon/public key
         """
         self.client: Client = create_client(url, key)
+        self.last_error = None  # 记录最近一次错误信息
 
     # ============================================================
     # 查询
@@ -117,8 +118,10 @@ class InfluencerDB:
         }
         try:
             self.client.table(self.TABLE_NAME).insert(record).execute()
+            self.last_error = None
             return True
-        except Exception:
+        except Exception as e:
+            self.last_error = str(e)
             return False
 
     def bulk_add(self, records: list[dict], discovered_by: str = "") -> int:

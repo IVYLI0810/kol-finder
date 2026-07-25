@@ -435,7 +435,7 @@ with tab_results:
                         if db.add_influencer(ch, st.session_state.user_name):
                             st.success(f"已添加「{ch['channel_name']}」")
                         else:
-                            st.error("添加失败，请检查数据库连接")
+                            st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
                     else:
                         # 本地模式
                         ch["status"] = "新发现"
