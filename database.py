@@ -11,6 +11,7 @@ class InfluencerDB:
     """公共网红数据库（基于 Supabase）"""
 
     TABLE_NAME = "influencers"
+    MEMBERS_TABLE = "members"  # 团队成员名单（只存名字，方便下拉选择）
 
     def __init__(self, url: str, key: str):
         """
@@ -249,6 +250,38 @@ class InfluencerDB:
         """从库中移除"""
         try:
             self.client.table(self.TABLE_NAME).delete().eq("channel_id", channel_id).execute()
+            return True
+        except Exception:
+            return False
+
+    # ============================================================
+    # 成员名单
+    # ============================================================
+
+    def get_members(self) -> list[str]:
+        """获取所有团队成员名字（按加入顺序）"""
+        try:
+            result = (
+                self.client.table(self.MEMBERS_TABLE)
+                .select("name")
+                .order("id")
+                .execute()
+            )
+            return [r["name"] for r in (result.data or []) if r.get("name")]
+        except Exception:
+            return []
+
+    def add_member(self, name: str) -> bool:
+        """添加新成员（名字已存在则视为成功）"""
+        name = (name or "").strip()
+        if not name:
+            return False
+        if name in self.get_members():
+            return True
+        try:
+            self.client.table(self.MEMBERS_TABLE).insert(
+                {"name": name, "joined_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            ).execute()
             return True
         except Exception:
             return False

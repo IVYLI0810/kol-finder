@@ -42,12 +42,12 @@ DEFAULT_CONFIG = {
     "max_subs": 20000,
     # 活跃天数
     "days_active": 30,
-    # 评分阈值
-    "score_threshold": 60,
-    # 评分权重
+    # 评分阈值（小博主商业化普遍为0，线太高会漏掉好人，45更合理）
+    "score_threshold": 45,
+    # 评分权重（垂直度提到35：内容对口最重要；商业化降到15：小博主没接过广告很正常）
     "weights": {
-        "verticality": 25,       # 内容垂直度
-        "commercial": 25,        # 商业化历史
+        "verticality": 35,       # 内容垂直度
+        "commercial": 15,        # 商业化历史
         "data_health": 20,       # 数据健康度
         "frequency": 15,         # 更新频率
         "keywords": 15,          # 种草关键词
@@ -402,6 +402,9 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
         "view_sub_ratio": round(view_sub_ratio, 1),
         "recent_titles": recent_titles[:5],
         "recent_thumbnails": recent_thumbnails[:5],
+        # 简介和标签用于垂类"三合一"判断（截断省内存，关键词一般在前300字）
+        "recent_descriptions": [d[:300] for d in recent_descriptions[:5]],
+        "recent_tags": recent_tags[:5],
         "emails": emails,
         "commercial_history": commercial,
     })
@@ -426,16 +429,20 @@ def score_channel(channel_info: dict, category: str = None, config: dict = None)
 
     scores = {}
 
-    # 1. 内容垂直度
-    w = weights.get("verticality", 25)
+    # 1. 内容垂直度（三合一：标题+简介+标签，任一命中即算"对口"）
+    w = weights.get("verticality", 35)
     if category and category in CATEGORY_KEYWORDS:
         keywords = CATEGORY_KEYWORDS[category]
-        # 逐条视频标题检查
         titles = channel_info.get("recent_titles", [])
+        descs = channel_info.get("recent_descriptions", [])
+        tags = channel_info.get("recent_tags", [])
         if titles:
             match_count = 0
-            for title in titles:
-                if any(kw in title.lower() for kw in keywords):
+            for i, title in enumerate(titles):
+                desc = descs[i] if i < len(descs) else ""
+                tag_text = " ".join(tags[i]) if i < len(tags) else ""
+                combined = f"{title} {desc} {tag_text}".lower()
+                if any(kw.lower() in combined for kw in keywords):
                     match_count += 1
             ratio = match_count / len(titles)
         else:
@@ -447,7 +454,7 @@ def score_channel(channel_info: dict, category: str = None, config: dict = None)
         scores["verticality_ratio"] = 50
 
     # 2. 商业化历史
-    w = weights.get("commercial", 25)
+    w = weights.get("commercial", 15)
     commercial = channel_info.get("commercial_history", {})
     raw_commercial = commercial.get("score", 5)
     scores["commercial"] = round(raw_commercial / 25 * w)  # 按权重缩放
@@ -563,8 +570,8 @@ def search_and_verify(keyword: str, category: str, api_key: str, quota: QuotaTra
     max_subs = config.get("max_subs", 20000)
     threshold = config.get("score_threshold", 60)
 
-    # Step 1: 搜索视频
-    videos = search_videos(keyword, api_key, quota, max_results=25)
+    # Step 1: 搜索视频（搜索接口固定100单位/次，抓50个不增加配额，候选池翻倍）
+    videos = search_videos(keyword, api_key, quota, max_results=50)
     if not videos:
         return []
 

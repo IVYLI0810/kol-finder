@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import json
 import re
+import html as html_lib
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -15,6 +16,13 @@ from youtube_api import (
     score_channel, search_videos, should_exclude,
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG,
 )
+
+# ============================================================
+# 团队公共库配置（写死在代码里，所有人共用，不用每次填）
+# Supabase 的 anon key 是设计成可以公开的，只能读写咱们建的表，放心。
+# ============================================================
+SUPABASE_URL = "https://webjrwzorxxlqrcrrnro.supabase.co"
+SUPABASE_KEY = "sb_publishable_eUDicGLoUiNhPO04S6iz8g_UX_SkSCH"  # 团队公共key，已配置好
 
 # ============================================================
 # 页面配置
@@ -28,70 +36,160 @@ st.set_page_config(
 )
 
 # ============================================================
-# 苹果极简风样式
+# 粉黑星星风样式（多巴胺 · 甜酷粉）
 # ============================================================
 
 st.markdown("""
 <style>
-    .stApp { background-color: #f5f5f7; }
+    /* ---------- 全局底色：粉色渐变 ---------- */
+    .stApp {
+        background: linear-gradient(160deg, #fbe4ee 0%, #f6cddd 100%);
+        background-attachment: fixed;
+    }
     footer { visibility: hidden; }
 
-    h1, h2, h3 {
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', sans-serif;
-        color: #1d1d1f; font-weight: 600;
+    h1, h2, h3, h4 {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'PingFang SC', sans-serif;
+        color: #2b1c22; font-weight: 800; letter-spacing: -0.01em;
     }
-    p, span, div, label, td, th, a {
+    p, span, div, label, td, th, a, li {
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'PingFang SC', sans-serif;
     }
 
-    .channel-card {
-        background: white; border-radius: 16px; padding: 22px 26px;
-        margin-bottom: 14px; box-shadow: 0 1px 8px rgba(0,0,0,0.04);
-        border: 1px solid #e8e8ed;
+    /* ---------- 顶部 hero ---------- */
+    .app-hero { text-align: center; padding: 8px 0 4px; position: relative; }
+    .app-hero .hero-logo {
+        width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%;
+        background: #2b1c22; color: #fff; display: flex; align-items: center; justify-content: center;
+        font-size: 24px; box-shadow: 0 8px 20px rgba(43,28,34,.25);
     }
-    .channel-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+    .app-hero .hero-title { font-size: 32px; font-weight: 800; color: #2b1c22; margin: 0 0 6px; letter-spacing: -0.02em; }
+    .app-hero .hero-sub { font-size: 14px; color: #96707f; font-weight: 500; margin: 0; }
+    .app-hero .hero-star { position: absolute; top: 14px; font-size: 20px; }
+    .app-hero .hero-star-l { left: 22%; color: #a78bfa; transform: rotate(-12deg); }
+    .app-hero .hero-star-r { right: 22%; color: #ffcf5c; transform: rotate(10deg); font-size: 24px; }
+
+    /* ---------- 频道卡片 ---------- */
+    .channel-card {
+        background: #ffffff; border-radius: 24px; padding: 24px 28px;
+        margin-bottom: 16px; box-shadow: 0 12px 32px rgba(43,28,34,.10);
+    }
+    .channel-card:hover { box-shadow: 0 16px 40px rgba(43,28,34,.14); }
+
+    .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+    .card-name { font-size: 18px; font-weight: 800; color: #2b1c22; letter-spacing: -0.01em; line-height: 1.35; }
+    .card-links { text-align: right; white-space: nowrap; }
+    .card-links a { font-size: 13px; font-weight: 600; text-decoration: none; }
+    .card-links .link-home { color: #7c5ce0; }
+    .card-links .link-about { color: #c39aa9; }
+
+    .rank-circle {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 30px; height: 30px; border-radius: 50%; font-size: 14px; font-weight: 800;
+        background: #efe9ff; color: #7c5ce0; margin-right: 10px; flex-shrink: 0;
+    }
 
     .score-badge {
-        display: inline-block; padding: 4px 14px; border-radius: 20px;
-        font-size: 14px; font-weight: 600;
+        display: inline-block; padding: 8px 16px; border-radius: 16px;
+        font-size: 16px; font-weight: 800; line-height: 1;
     }
-    .score-high { background: #e8f5e9; color: #2e7d32; }
-    .score-mid { background: #fff3e0; color: #e65100; }
-    .score-low { background: #fce4ec; color: #c62828; }
+    .score-high { background: #efe9ff; color: #7c5ce0; }
+    .score-mid { background: #fff3d6; color: #c08a00; }
+    .score-low { background: #fdeef4; color: #c2557f; }
 
-    .status-tag {
-        display: inline-block; padding: 3px 12px; border-radius: 12px;
-        font-size: 12px; font-weight: 500;
+    .tag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .cat-tag {
+        display: inline-block; padding: 4px 13px; border-radius: 999px;
+        font-size: 12px; font-weight: 800; background: #fdeef4; color: #c2557f;
     }
-    .status-new { background: #e3f2fd; color: #1565c0; }
-    .status-emailed { background: #fff3e0; color: #e65100; }
-    .status-onboard { background: #e8f5e9; color: #2e7d32; }
-    .status-reject { background: #fce4ec; color: #c62828; }
-
-    .thumb-row { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; }
-    .thumb-item { flex-shrink: 0; text-align: center; }
-    .thumb-item img { width: 120px; height: 68px; object-fit: cover; border-radius: 8px; }
-    .thumb-item span { font-size: 10px; color: #86868b; display: block; margin-top: 2px; }
-
     .commercial-badge {
-        display: inline-block; padding: 2px 10px; border-radius: 10px;
-        font-size: 11px; background: #ede7f6; color: #4527a0; margin-left: 8px;
+        display: inline-block; padding: 4px 13px; border-radius: 999px;
+        font-size: 12px; font-weight: 800; background: #efe9ff; color: #7c5ce0;
     }
 
+    .stat-grid { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .stat-pill {
+        flex: 1; min-width: 110px; border-radius: 16px; padding: 10px 14px;
+        font-size: 13px; font-weight: 600; color: #2b1c22;
+    }
+    .stat-pill .k { display: block; font-size: 11px; font-weight: 600; color: #96707f; margin-top: 2px; }
+    .stat-p1 { background: #fdeef4; }
+    .stat-p2 { background: #efe9ff; }
+    .stat-p3 { background: #fff3d6; }
+    .stat-p4 { background: #fdeef4; }
+
+    .email-line { font-size: 13px; color: #2b1c22; margin-bottom: 6px; }
+    .email-line .email-chip {
+        display: inline-block; font-weight: 800; background: #efe9ff; color: #7c5ce0;
+        padding: 5px 14px; border-radius: 999px;
+    }
+    .titles-line { font-size: 12px; color: #96707f; margin-top: 6px; line-height: 1.6; }
+    .score-detail-line { font-size: 11px; color: #c39aa9; margin-top: 4px; }
+
+    .thumb-row { display: flex; gap: 10px; margin-top: 12px; overflow-x: auto; }
+    .thumb-item { flex-shrink: 0; text-align: center; }
+    .thumb-item img { width: 130px; height: 73px; object-fit: cover; border-radius: 14px; }
+    .thumb-item span { font-size: 10px; color: #c39aa9; display: block; margin-top: 3px; }
+
+    /* ---------- 状态标签（网红库） ---------- */
+    .status-tag {
+        display: inline-block; padding: 3px 12px; border-radius: 999px;
+        font-size: 12px; font-weight: 800;
+    }
+    .status-new { background: #fdeef4; color: #c2557f; }
+    .status-emailed { background: #fff3d6; color: #c08a00; }
+    .status-onboard { background: #efe9ff; color: #7c5ce0; }
+    .status-reject { background: #f1e9ec; color: #96707f; }
+
+    /* ---------- 侧边栏 ---------- */
     section[data-testid="stSidebar"] {
-        background-color: #ffffff; border-right: 1px solid #e8e8ed;
+        background-color: #fffdf9; border-right: 1px solid #f3d3e0;
     }
-    .stButton > button {
-        border-radius: 24px; padding: 10px 28px; font-weight: 500;
-        border: none; background-color: #0071e3; color: white;
-    }
-    .stButton > button:hover { background-color: #0077ed; }
 
-    div[data-testid="stMetric"] {
-        background: white; border-radius: 14px; padding: 16px 20px;
-        box-shadow: 0 1px 6px rgba(0,0,0,0.03);
+    /* ---------- 按钮：黑色胶囊 ---------- */
+    .stButton > button, .stDownloadButton > button {
+        border-radius: 999px; padding: 10px 26px; font-weight: 800;
+        border: none; background-color: #2b1c22; color: #ffffff;
+        box-shadow: 0 5px 14px rgba(43,28,34,.25);
+        transition: all .15s;
     }
-    hr { border-color: #e8e8ed; }
+    .stButton > button:hover, .stDownloadButton > button:hover {
+        background-color: #3d2b33; color: #ffffff; transform: translateY(-1px);
+        box-shadow: 0 8px 18px rgba(43,28,34,.3);
+    }
+
+    /* ---------- Tabs：选中=黑底白字 ---------- */
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: none; }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 999px; padding: 8px 22px; font-weight: 700;
+        background: #fdeef4; color: #2b1c22; border: 2px solid transparent;
+    }
+    .stTabs [aria-selected="true"] {
+        background: #2b1c22 !important; color: #ffffff !important;
+        box-shadow: 0 4px 12px rgba(43,28,34,.25);
+    }
+    .stTabs [data-baseweb="tab-highlight"] { background-color: transparent; }
+
+    /* ---------- 指标卡 ---------- */
+    div[data-testid="stMetric"] {
+        background: #ffffff; border-radius: 18px; padding: 16px 20px;
+        box-shadow: 0 8px 24px rgba(43,28,34,.08);
+    }
+    div[data-testid="stMetricLabel"] { color: #96707f; font-weight: 600; }
+    div[data-testid="stMetricValue"] { color: #2b1c22; font-weight: 800; }
+
+    /* ---------- 输入框 / 选择框 ---------- */
+    .stTextInput > div > div > input, .stTextArea > div > div > textarea {
+        border-radius: 16px; border: 2px solid #f3d3e0; background: #ffffff;
+    }
+    .stTextInput > div > div > input:focus, .stTextArea > div > div > textarea:focus {
+        border-color: #2b1c22; box-shadow: 0 4px 14px rgba(43,28,34,.12);
+    }
+    div[data-baseweb="select"] > div {
+        border-radius: 16px; border: 2px solid #f3d3e0; background: #ffffff;
+    }
+
+    hr { border-color: #f3d3e0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,13 +198,53 @@ st.markdown("""
 # ============================================================
 
 KEYWORD_LIBRARY = {
-    "家居收纳": ["자취방 꾸미기 가성비", "원룸 수납 정리", "자취생 필수템 추천", "다이소 수납템", "집꾸미기 브이로그", "작은 방 인테리어", "혼자 사는 여자 방 꾸미기"],
-    "平价美妆": ["가성비 화장품 추천", "학생 메이크업 화장품", "올리브영 추천템", "데일리 메이크업 학생", "출근 메이크업 추천", "맑은 메이크업", "로드샵 화장품 추천"],
-    "宿舍好物": ["대학생 필수템 추천", "기숙사 필수템", "개강 준비물 리스트", "기숙사 꾸미기 템", "대학생 브이로그 자취"],
-    "通勤配件": ["직장인 가방 추천 여자", "출근 가방 미니백", "통근룩 가방 추천", "왓츠인마이백 직장인", "가벼운 미니백 추천", "가성비 데일리백"],
-    "宠物用品": ["고양이 필수템 추천", "강아지 용품 추천", "펫용품 가성비", "펫테리어", "집사 브이로그"],
-    "学生用品": ["문구 추천 학생", "공부 브이로그 문구템", "다이소 문구 추천", "필통 꾸미기", "아이패드 공부템"],
+    "家居收纳": [
+        "자취방 꾸미기 가성비", "원룸 수납 정리", "자취생 필수템 추천",
+        "다이소 수납템", "집꾸미기 브이로그", "작은 방 인테리어",
+        "혼자 사는 여자 방 꾸미기", "정리정돈 꿀팁", "미니멀 라이프 자취",
+    ],
+    "平价美妆": [
+        "가성비 화장품 추천", "학생 메이크업 화장품", "올리브영 추천템",
+        "데일리 메이크업 학생", "출근 메이크업 추천", "로드샵 화장품 추천",
+        "만원 이하 화장품", "화장품 언박싱 추천",
+    ],
+    "宿舍好物": [
+        "대학생 필수템 추천", "기숙사 필수템", "개강 준비물 리스트",
+        "기숙사 꾸미기 템", "대학생 브이로그 자취", "자취생 꿀템 추천",
+        "대학생 개강 준비",
+    ],
+    "通勤配件": [
+        "직장인 가방 추천 여자", "출근 가방 미니백", "왓츠인마이백 직장인",
+        "가벼운 미니백 추천", "가성비 데일리백", "직장인 출근룩 가방",
+        "통근룩 코디 추천",
+    ],
+    "宠物用品": [
+        "고양이 필수템 추천", "강아지 용품 추천", "펫용품 가성비",
+        "펫테리어", "집사 브이로그", "고양이 용품 언박싱",
+        "반려동물 용품 추천",
+    ],
+    "学生用品": [
+        "문구 추천 학생", "공부 브이로그 문구템", "다이소 문구 추천",
+        "필통 꾸미기", "아이패드 공부템", "스터디 위드 미 공부",
+        "문구 언박싱 추천",
+    ],
 }
+
+
+def _safe(text) -> str:
+    """
+    清理动态文本，防止破坏卡片排版。
+    视频标题里常带 | 竖线、< > 符号、换行等，直接塞进HTML会让排版引擎
+    误判，导致卡片变成一堆代码。这里统一转义/替换掉这些"捣乱"字符。
+    """
+    if text is None:
+        return ""
+    text = str(text)
+    text = html_lib.escape(text)          # 转义 < > & " '
+    text = text.replace("|", "｜")        # 竖线换成全角，避免被当成表格
+    text = text.replace("\n", " ")        # 换行换成空格
+    return text
+
 
 # ============================================================
 # Session State 初始化
@@ -115,9 +253,9 @@ KEYWORD_LIBRARY = {
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
 if "supabase_url" not in st.session_state:
-    st.session_state.supabase_url = ""
+    st.session_state.supabase_url = SUPABASE_URL
 if "supabase_key" not in st.session_state:
-    st.session_state.supabase_key = ""
+    st.session_state.supabase_key = SUPABASE_KEY
 if "db" not in st.session_state:
     st.session_state.db = None  # InfluencerDB 实例
 if "quota" not in st.session_state:
@@ -141,6 +279,9 @@ if "local_db" not in st.session_state:
 
 def get_db():
     """获取数据库实例（Supabase 或本地模式）"""
+    # Key 还是占位符（没配置）时不连接，走本地模式
+    if st.session_state.supabase_key == "PASTE_YOUR_ANON_KEY_HERE":
+        return None
     if st.session_state.supabase_url and st.session_state.supabase_key:
         try:
             from database import InfluencerDB
@@ -167,46 +308,80 @@ def get_all_records() -> list[dict]:
 # ============================================================
 
 with st.sidebar:
-    st.markdown("### ⚙️ 连接设置")
+    # ---------- 名字：下拉快选 / 新成员登记，记住在网址里 ----------
+    st.markdown("### 👋 先选个名字")
+    st.caption("填一次，以后刷新都记得你")
+
+    # 从网址参数恢复名字（刷新不丢）
+    url_name = st.query_params.get("u", "")
+    if url_name and not st.session_state.user_name:
+        st.session_state.user_name = url_name
+
+    db_for_members = get_db()
+    members = db_for_members.get_members() if db_for_members else []
+
+    NEW = "➕ 我是新成员"
+    display_members = list(members)
+    if st.session_state.user_name and st.session_state.user_name not in display_members:
+        display_members.append(st.session_state.user_name)
+
+    options = display_members + [NEW]
+    if st.session_state.user_name in display_members:
+        default_idx = display_members.index(st.session_state.user_name)
+    else:
+        default_idx = len(display_members)  # 默认落在"新成员"
+
+    chosen = st.selectbox("你是谁？", options, index=default_idx, key="who_select")
+
+    if chosen == NEW:
+        new_name = st.text_input("输入你的名字", key="new_name_input",
+                                 placeholder="例如：小美")
+        if st.button("✅ 记住我", key="save_name", use_container_width=True):
+            if new_name.strip():
+                if db_for_members:
+                    db_for_members.add_member(new_name.strip())
+                st.session_state.user_name = new_name.strip()
+                st.query_params["u"] = new_name.strip()
+                # 清空控件记忆，让下拉框回到"已选中"状态
+                for k in ("who_select", "new_name_input"):
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.rerun()
+            else:
+                st.warning("先输入名字哦")
+    else:
+        if chosen != st.session_state.user_name:
+            st.session_state.user_name = chosen
+            st.query_params["u"] = chosen
+
+    if st.session_state.user_name:
+        st.success(f"🌸 你好，{st.session_state.user_name}！刷新不会丢")
+
+    # ---------- YouTube API Key：每次自己填，不存数据库 ----------
     st.markdown("")
-
-    # 用户名
-    st.session_state.user_name = st.text_input(
-        "你的名字", value=st.session_state.user_name,
-        placeholder="用于标记\"挖掘人\"",
-    )
-
-    # YouTube API Key
+    st.markdown("#### 🔑 YouTube API Key")
     api_key_input = st.text_input(
-        "YouTube API Key", value=st.session_state.api_key,
-        type="password", help="Google Cloud Console 获取，免费10,000 units/天",
+        "API Key", value=st.session_state.api_key, type="password",
+        label_visibility="collapsed",
+        help="Google Cloud Console 获取，免费10,000 units/天。为安全起见不存数据库，每次自己填。",
+        placeholder="粘贴你的 YouTube API Key",
     )
     if api_key_input != st.session_state.api_key:
         st.session_state.api_key = api_key_input
         st.session_state.quota = QuotaTracker()
 
-    # Supabase
+    # ---------- 公共库：已写死在代码里，只显示状态 ----------
     st.markdown("")
-    st.markdown("#### 🗄 公共库（Supabase）")
-    sb_url = st.text_input("Supabase URL", value=st.session_state.supabase_url,
-                           placeholder="https://xxxx.supabase.co")
-    sb_key = st.text_input("Supabase Key", value=st.session_state.supabase_key,
-                           type="password", placeholder="anon public key")
-
-    if sb_url != st.session_state.supabase_url or sb_key != st.session_state.supabase_key:
-        st.session_state.supabase_url = sb_url
-        st.session_state.supabase_key = sb_key
-        st.session_state.db = None  # 重置连接
-
+    st.markdown("#### 🗄 公共库")
     db = get_db()
-    if db:
-        st.success("✅ 公共库已连接")
-    elif sb_url and sb_key:
-        st.error("❌ 连接失败，请检查URL和Key")
+    if SUPABASE_KEY == "PASTE_YOUR_ANON_KEY_HERE":
+        st.warning("⚠️ 还没配置公共库，请联系管理员填Key")
+    elif db:
+        st.success("✅ 已连接（自动配置，不用填）")
     else:
-        st.info("💡 未连接公共库，使用本地模式（数据不共享）")
+        st.error("❌ 连接失败，请联系管理员")
 
-    # 配额
+    # ---------- 配额 ----------
     st.markdown("")
     st.markdown("#### 📊 今日配额")
     quota = st.session_state.quota
@@ -218,19 +393,26 @@ with st.sidebar:
         st.warning("⚠️ 配额即将用完")
 
     st.markdown("")
-    st.caption("KOL Finder v2.0")
+    st.caption("KOL Finder v2.1 · 粉黑星星风")
 
 
 # ============================================================
 # 主区域
 # ============================================================
 
-st.markdown("# 🔍 KOL Finder")
-st.markdown("韩国 YouTube 网红挖掘 · 自动验证活跃 · 智能评分 · 公共库去重")
+st.markdown("""
+<div class="app-hero">
+    <span class="hero-star hero-star-l">✦</span>
+    <span class="hero-star hero-star-r">✦</span>
+    <div class="hero-logo">✦</div>
+    <div class="hero-title">KOL Finder</div>
+    <div class="hero-sub">韩国 YouTube 网红挖掘 · 自动验证活跃 · 智能评分 · 公共库去重</div>
+</div>
+""", unsafe_allow_html=True)
 st.markdown("")
 
-tab_search, tab_results, tab_database, tab_import, tab_settings = st.tabs([
-    "🔎 搜索挖掘", "📊 搜索结果", "📁 网红库", "📥 批量导入", "⚙️ 筛选设置"
+tab_search, tab_database, tab_import, tab_settings = st.tabs([
+    "🔎 搜索挖掘", "📁 网红库", "📥 批量导入", "⚙️ 筛选设置"
 ])
 
 # ============================================================
@@ -245,35 +427,55 @@ with tab_search:
     if not st.session_state.api_key:
         st.info("👈 请先在左侧填入 YouTube API Key")
     else:
-        col1, col2 = st.columns([3, 1])
+        # ---------- 垂类选择 ----------
+        category_select = st.selectbox(
+            "垂类", options=list(KEYWORD_LIBRARY.keys()),
+            help="切换垂类后，下方推荐关键词会跟着变",
+        )
+
+        # ---------- 推荐关键词 · 一键点选 ----------
+        st.markdown("✨ **推荐关键词** · 点击任意一个直接搜索")
+        chip_kws = KEYWORD_LIBRARY[category_select]
+        for row_start in range(0, len(chip_kws), 3):
+            chip_cols = st.columns(3)
+            for j, kw in enumerate(chip_kws[row_start:row_start + 3]):
+                with chip_cols[j]:
+                    if st.button(kw, key=f"kwchip_{category_select}_{row_start + j}",
+                                 use_container_width=True):
+                        st.session_state.pending_kw = kw
+
+        st.markdown("")
+
+        # ---------- 自定义关键词 ----------
+        col1, col2, col3 = st.columns([3, 1, 1])
         with col1:
             keyword_input = st.text_input(
-                "搜索关键词", placeholder="例：자취방 꾸미기 가성비",
+                "搜索关键词", placeholder="也可以输入自定义关键词，例：자취방 꾸미기 가성비",
                 label_visibility="collapsed",
             )
         with col2:
-            category_select = st.selectbox(
-                "垂类", options=list(KEYWORD_LIBRARY.keys()),
-                label_visibility="collapsed",
-            )
-
-        col_b1, col_b2, col_b3 = st.columns([1, 1, 2])
-        with col_b1:
             search_btn = st.button("🔍 搜索", use_container_width=True)
-        with col_b2:
-            batch_btn = st.button("⚡ 批量搜索", use_container_width=True,
-                                  help="使用当前垂类全部预置关键词")
+        with col3:
+            batch_btn = st.button("⚡ 批量", use_container_width=True,
+                                  help="使用当前垂类全部预置关键词搜索")
 
         st.markdown("")
 
         # 获取库中记录用于去重
         db_records = get_all_records()
 
+        # 搜索触发：优先用点击的推荐词，其次用自定义输入
+        search_keyword = None
+        if st.session_state.get("pending_kw"):
+            search_keyword = st.session_state.pop("pending_kw")
+        elif search_btn and keyword_input.strip():
+            search_keyword = keyword_input.strip()
+
         # 单个搜索
-        if search_btn and keyword_input.strip():
-            with st.spinner(f"正在搜索「{keyword_input}」并验证活跃度..."):
+        if search_keyword:
+            with st.spinner(f"正在搜索「{search_keyword}」并验证活跃度..."):
                 results = search_and_verify(
-                    keyword=keyword_input.strip(),
+                    keyword=search_keyword,
                     category=category_select,
                     api_key=st.session_state.api_key,
                     quota=st.session_state.quota,
@@ -282,7 +484,7 @@ with tab_search:
                 )
                 st.session_state.search_results = results
                 st.session_state.search_log.append({
-                    "keyword": keyword_input, "category": category_select,
+                    "keyword": search_keyword, "category": category_select,
                     "time": datetime.now().strftime("%H:%M"), "results": len(results),
                 })
                 if results:
@@ -323,6 +525,163 @@ with tab_search:
             st.session_state.search_results = unique
             status_text.success(f"✅ 批量完成，共 {len(unique)} 个活跃博主")
 
+        # ---------- 搜索结果（和搜索同页展示） ----------
+        if st.session_state.search_results:
+            st.markdown("---")
+            st.markdown("### 🎯 搜索结果")
+
+            results = st.session_state.search_results
+
+            # 筛选
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                min_score_filter = st.slider("最低评分", 0, 100,
+                                             st.session_state.config.get("score_threshold", 45), step=5)
+            with col_f2:
+                sort_by = st.selectbox("排序", ["综合评分", "订阅量", "近30天均播", "最近更新"])
+
+            filtered = [r for r in results if r["scores"]["total"] >= min_score_filter]
+            sort_keys = {
+                "综合评分": lambda x: x["scores"]["total"],
+                "订阅量": lambda x: x["subscribers"],
+                "近30天均播": lambda x: x["avg_views_30d"],
+                "最近更新": lambda x: x["last_upload"],
+            }
+            filtered.sort(key=sort_keys[sort_by], reverse=True)
+
+            st.markdown(f"共 {len(filtered)} 个博主")
+            st.markdown("")
+
+            # 频道卡片
+            for idx, ch in enumerate(filtered):
+                score = ch["scores"]["total"]
+                score_class = "score-high" if score >= 70 else ("score-mid" if score >= 50 else "score-low")
+                commercial = ch.get("commercial_history", {})
+                has_comm = commercial.get("has_commercial", False)
+                emails = ch.get("emails", [])
+                email_display = emails[0] if emails else "未公开"
+                thumbnails = ch.get("recent_thumbnails", [])
+
+                # 缩略图HTML
+                thumb_html = ""
+                if thumbnails:
+                    items = ""
+                    for t in thumbnails[:4]:
+                        items += f'<div class="thumb-item"><img src="{t["url"]}" alt=""><span>{t["date"]}</span></div>'
+                    thumb_html = f'<div class="thumb-row">{items}</div>'
+
+                # 商业化标记
+                comm_html = ""
+                if has_comm:
+                    evidence = ", ".join(commercial.get("evidence", [])[:3])
+                    comm_html = f'<span class="commercial-badge">💰 有商业合作 ({_safe(evidence)})</span>'
+
+                # 代表视频标题（清理特殊符号，防止破坏排版）
+                titles_clean = " / ".join(_safe(t) for t in ch.get("recent_titles", [])[:3])
+
+                st.markdown(f"""
+                <div class="channel-card">
+                    <div class="card-head">
+                        <div style="display:flex; align-items:flex-start;">
+                            <span class="rank-circle">{idx+1}</span>
+                            <div>
+                                <div class="card-name">{_safe(ch['channel_name'])}</div>
+                                <div class="tag-row" style="margin-top:8px; margin-bottom:0;">
+                                    <span class="cat-tag">📂 {_safe(ch.get('category', ''))}</span>
+                                    {comm_html}
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:14px;">
+                            <span class="score-badge {score_class}">{score}</span>
+                            <div class="card-links">
+                                <a class="link-home" href="{ch['channel_url']}" target="_blank">主页 ↗</a><br>
+                                <a class="link-about" href="{ch.get('about_url', ch['channel_url'])}" target="_blank">简介页 ↗</a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="stat-grid">
+                        <div class="stat-pill stat-p1">📺 {ch['subscribers']:,}<span class="k">订阅数</span></div>
+                        <div class="stat-pill stat-p2">👁 {ch['avg_views_30d']:,}<span class="k">30天均播</span></div>
+                        <div class="stat-pill stat-p3">📈 {ch['view_sub_ratio']}%<span class="k">播/订比</span></div>
+                        <div class="stat-pill stat-p4">🕐 {ch['last_upload_days_ago']}天前<span class="k">最近更新</span></div>
+                    </div>
+                    <div class="email-line">📧 联系邮箱 <span class="email-chip">{_safe(email_display)}</span></div>
+                    <div class="titles-line">代表视频：{titles_clean}</div>
+                    <div class="score-detail-line">
+                        评分明细 · 垂直{ch['scores']['verticality']} ＋ 商业{ch['scores']['commercial']} ＋
+                        数据{ch['scores']['data_health']} ＋ 频率{ch['scores']['frequency']} ＋
+                        关键词{ch['scores']['keywords']}
+                    </div>
+                    {thumb_html}
+                </div>
+                """, unsafe_allow_html=True)
+
+                # 操作按钮
+                col_a1, col_a2, col_a3 = st.columns([1, 1, 3])
+                with col_a1:
+                    if st.button("✅ 加入网红库", key=f"add_{idx}", use_container_width=True):
+                        db = get_db()
+                        if db:
+                            if db.add_influencer(ch, st.session_state.user_name):
+                                st.success(f"已添加「{ch['channel_name']}」")
+                            else:
+                                st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
+                        else:
+                            # 本地模式
+                            ch["status"] = "新发现"
+                            ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            ch["discovered_by"] = st.session_state.user_name
+                            st.session_state.local_db.append(ch)
+                            st.success(f"已添加「{ch['channel_name']}」（本地模式）")
+                with col_a2:
+                    if st.button("跳过", key=f"skip_{idx}", use_container_width=True):
+                        st.session_state.search_results.remove(ch)
+                        st.rerun()
+                st.markdown("")
+
+            # 批量操作
+            st.markdown("---")
+            col_ba1, col_ba2 = st.columns(2)
+            with col_ba1:
+                if st.button("✅ 全部加入网红库", use_container_width=True):
+                    db = get_db()
+                    added = 0
+                    for ch in filtered:
+                        if db:
+                            if db.add_influencer(ch, st.session_state.user_name):
+                                added += 1
+                        else:
+                            ch["status"] = "新发现"
+                            ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            ch["discovered_by"] = st.session_state.user_name
+                            st.session_state.local_db.append(ch)
+                            added += 1
+                    st.success(f"已添加 {added} 个博主")
+            with col_ba2:
+                if filtered:
+                    export_data = []
+                    for ch in filtered:
+                        export_data.append({
+                            "频道名": ch["channel_name"], "主页链接": ch["channel_url"],
+                            "垂类": ch.get("category", ""), "订阅量": ch["subscribers"],
+                            "近30天均播": ch["avg_views_30d"], "评分": ch["scores"]["total"],
+                            "联系邮箱": ", ".join(ch.get("emails", [])) or "未公开",
+                            "有商业合作": "是" if ch.get("commercial_history", {}).get("has_commercial") else "否",
+                            "最近更新": ch["last_upload"],
+                            "代表视频": " / ".join(ch.get("recent_titles", [])[:3]),
+                        })
+                    buffer = BytesIO()
+                    pd.DataFrame(export_data).to_excel(buffer, index=False, engine="openpyxl")
+                    st.download_button(
+                        "📥 导出结果 (Excel)", data=buffer.getvalue(),
+                        file_name=f"搜索结果_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+        elif not st.session_state.search_log:
+            st.info("💡 点击上方推荐关键词，或输入自定义关键词后点「搜索」")
+
         # 搜索历史
         if st.session_state.search_log:
             st.markdown("")
@@ -332,166 +691,7 @@ with tab_search:
 
 
 # ============================================================
-# Tab 2: 搜索结果
-# ============================================================
-
-with tab_results:
-    st.markdown("### 搜索结果")
-    st.markdown("")
-
-    if not st.session_state.search_results:
-        st.info("暂无结果，请先在「🔎 搜索挖掘」中搜索")
-    else:
-        results = st.session_state.search_results
-
-        # 筛选
-        col_f1, col_f2 = st.columns(2)
-        with col_f1:
-            min_score_filter = st.slider("最低评分", 0, 100,
-                                         st.session_state.config.get("score_threshold", 60), step=5)
-        with col_f2:
-            sort_by = st.selectbox("排序", ["综合评分", "订阅量", "近30天均播", "最近更新"])
-
-        filtered = [r for r in results if r["scores"]["total"] >= min_score_filter]
-        sort_keys = {
-            "综合评分": lambda x: x["scores"]["total"],
-            "订阅量": lambda x: x["subscribers"],
-            "近30天均播": lambda x: x["avg_views_30d"],
-            "最近更新": lambda x: x["last_upload"],
-        }
-        filtered.sort(key=sort_keys[sort_by], reverse=True)
-
-        st.markdown(f"共 {len(filtered)} 个博主")
-        st.markdown("")
-
-        # 频道卡片
-        for idx, ch in enumerate(filtered):
-            score = ch["scores"]["total"]
-            score_class = "score-high" if score >= 70 else ("score-mid" if score >= 50 else "score-low")
-            commercial = ch.get("commercial_history", {})
-            has_comm = commercial.get("has_commercial", False)
-            emails = ch.get("emails", [])
-            email_display = emails[0] if emails else "未公开"
-            thumbnails = ch.get("recent_thumbnails", [])
-
-            # 缩略图HTML
-            thumb_html = ""
-            if thumbnails:
-                items = ""
-                for t in thumbnails[:4]:
-                    items += f'<div class="thumb-item"><img src="{t["url"]}" alt=""><span>{t["date"]}</span></div>'
-                thumb_html = f'<div class="thumb-row">{items}</div>'
-
-            # 商业化标记
-            comm_html = ""
-            if has_comm:
-                evidence = ", ".join(commercial.get("evidence", [])[:3])
-                comm_html = f'<span class="commercial-badge">💰 有商业合作 ({evidence})</span>'
-
-            st.markdown(f"""
-            <div class="channel-card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <div>
-                        <span style="font-size:17px; font-weight:600; color:#1d1d1f;">
-                            {idx+1}. {ch['channel_name']}
-                        </span>
-                        <span class="score-badge {score_class}" style="margin-left:10px;">{score}分</span>
-                        {comm_html}
-                    </div>
-                    <div style="text-align:right;">
-                        <a href="{ch['channel_url']}" target="_blank" style="color:#0071e3; text-decoration:none; font-size:13px;">主页 ↗</a>
-                        &nbsp;&nbsp;
-                        <a href="{ch.get('about_url', ch['channel_url'])}" target="_blank" style="color:#86868b; text-decoration:none; font-size:13px;">简介页 ↗</a>
-                    </div>
-                </div>
-                <div style="display:flex; gap:20px; flex-wrap:wrap; font-size:13px; color:#6e6e73;">
-                    <span>📺 {ch['subscribers']:,} 订阅</span>
-                    <span>👁 均播 {ch['avg_views_30d']:,}</span>
-                    <span>📈 播/订比 {ch['view_sub_ratio']}%</span>
-                    <span>🕐 更新 {ch['last_upload']}（{ch['last_upload_days_ago']}天前）</span>
-                    <span>📂 {ch.get('category', '')}</span>
-                </div>
-                <div style="margin-top:8px; font-size:13px; color:#1d1d1f;">
-                    📧 联系邮箱：<strong>{email_display}</strong>
-                </div>
-                <div style="margin-top:6px; font-size:12px; color:#86868b;">
-                    代表视频：{' / '.join(ch.get('recent_titles', [])[:3])}
-                </div>
-                <div style="margin-top:4px; font-size:11px; color:#aeaeb2;">
-                    评分：垂直{ch['scores']['verticality']} + 商业{ch['scores']['commercial']} +
-                    数据{ch['scores']['data_health']} + 频率{ch['scores']['frequency']} +
-                    关键词{ch['scores']['keywords']}
-                </div>
-                {thumb_html}
-            </div>
-            """, unsafe_allow_html=True)
-
-            # 操作按钮
-            col_a1, col_a2, col_a3 = st.columns([1, 1, 3])
-            with col_a1:
-                if st.button("✅ 加入网红库", key=f"add_{idx}", use_container_width=True):
-                    db = get_db()
-                    if db:
-                        if db.add_influencer(ch, st.session_state.user_name):
-                            st.success(f"已添加「{ch['channel_name']}」")
-                        else:
-                            st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
-                    else:
-                        # 本地模式
-                        ch["status"] = "新发现"
-                        ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        ch["discovered_by"] = st.session_state.user_name
-                        st.session_state.local_db.append(ch)
-                        st.success(f"已添加「{ch['channel_name']}」（本地模式）")
-            with col_a2:
-                if st.button("跳过", key=f"skip_{idx}", use_container_width=True):
-                    st.session_state.search_results.remove(ch)
-                    st.rerun()
-            st.markdown("")
-
-        # 批量操作
-        st.markdown("---")
-        col_ba1, col_ba2 = st.columns(2)
-        with col_ba1:
-            if st.button("✅ 全部加入网红库", use_container_width=True):
-                db = get_db()
-                added = 0
-                for ch in filtered:
-                    if db:
-                        if db.add_influencer(ch, st.session_state.user_name):
-                            added += 1
-                    else:
-                        ch["status"] = "新发现"
-                        ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        ch["discovered_by"] = st.session_state.user_name
-                        st.session_state.local_db.append(ch)
-                        added += 1
-                st.success(f"已添加 {added} 个博主")
-        with col_ba2:
-            if filtered:
-                export_data = []
-                for ch in filtered:
-                    export_data.append({
-                        "频道名": ch["channel_name"], "主页链接": ch["channel_url"],
-                        "垂类": ch.get("category", ""), "订阅量": ch["subscribers"],
-                        "近30天均播": ch["avg_views_30d"], "评分": ch["scores"]["total"],
-                        "联系邮箱": ", ".join(ch.get("emails", [])) or "未公开",
-                        "有商业合作": "是" if ch.get("commercial_history", {}).get("has_commercial") else "否",
-                        "最近更新": ch["last_upload"],
-                        "代表视频": " / ".join(ch.get("recent_titles", [])[:3]),
-                    })
-                buffer = BytesIO()
-                pd.DataFrame(export_data).to_excel(buffer, index=False, engine="openpyxl")
-                st.download_button(
-                    "📥 导出结果 (Excel)", data=buffer.getvalue(),
-                    file_name=f"搜索结果_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                )
-
-
-# ============================================================
-# Tab 3: 网红库
+# Tab 2: 网红库
 # ============================================================
 
 with tab_database:
@@ -563,19 +763,22 @@ with tab_database:
 
             st.markdown(f"""
             <div class="channel-card">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <span style="font-weight:600;">{name}</span>
-                        <span class="status-tag {status_class}" style="margin-left:8px;">{status}</span>
-                        <span style="margin-left:8px; font-size:12px; color:#86868b;">
-                            {cat} · {subs:,}订阅 · 评分{score}
-                            {' · 挖掘人: ' + discoverer if discoverer else ''}
-                        </span>
+                <div class="card-head" style="margin-bottom:0;">
+                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <span class="card-name">{_safe(name)}</span>
+                        <span class="status-tag {status_class}">{status}</span>
+                        <span class="cat-tag">📂 {_safe(cat)}</span>
                     </div>
-                    <a href="{url}" target="_blank" style="color:#0071e3; font-size:13px; text-decoration:none;">↗</a>
+                    <div class="card-links">
+                        <a class="link-home" href="{url}" target="_blank">主页 ↗</a>
+                    </div>
                 </div>
-                {'<div style="margin-top:6px; font-size:12px; color:#6e6e73;">📧 ' + email + '</div>' if email else ''}
-                {'<div style="margin-top:4px; font-size:12px; color:#86868b;">📝 ' + notes + '</div>' if notes else ''}
+                <div style="font-size:12px; color:#96707f; margin-top:10px;">
+                    📺 {subs:,} 订阅 · ⭐ 评分 {score}
+                    {' · 👤 挖掘人：' + _safe(discoverer) if discoverer else ''}
+                </div>
+                {'<div style="margin-top:8px; font-size:12px;">📧 <span class="email-chip">' + _safe(email) + '</span></div>' if email else ''}
+                {'<div style="margin-top:8px; font-size:12px; color:#96707f;">📝 ' + _safe(notes) + '</div>' if notes else ''}
             </div>
             """, unsafe_allow_html=True)
 
@@ -670,7 +873,7 @@ with tab_database:
 
 
 # ============================================================
-# Tab 4: 批量导入
+# Tab 3: 批量导入
 # ============================================================
 
 with tab_import:
@@ -746,7 +949,7 @@ UCxxxxxxxxxxxx""", language=None)
 
 
 # ============================================================
-# Tab 5: 筛选设置
+# Tab 4: 筛选设置
 # ============================================================
 
 with tab_settings:
