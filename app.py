@@ -41,31 +41,37 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* ---------- 全局底色：饱和泡泡糖粉渐变（参考图2）· 钉在屏幕上 ---------- */
+    @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@700;800&display=swap');
+
+    /* ---------- 全局底色：纯色粉（卡通像素风 · 无毛玻璃无渐变） ---------- */
     .stApp {
-        background: linear-gradient(160deg, #f8aec1 0%, #f49db3 55%, #f195ab 100%);
+        background: #f5a3b8;
         background-attachment: fixed;
     }
     footer { visibility: hidden; }
 
     h1, h2, h3, h4 {
-        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'PingFang SC', sans-serif;
-        color: #43303a; font-weight: 800; letter-spacing: -0.01em;
+        font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        color: #1c1c1e; font-weight: 800; letter-spacing: -0.01em;
     }
     p, span, div, label, td, th, a, li {
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'PingFang SC', sans-serif;
     }
 
-    /* ---------- 顶部 hero ---------- */
+    /* ---------- 顶部 hero：黑圆标 + 黄投影标题（卡通像素风） ---------- */
     .app-hero { text-align: center; padding: 8px 0 4px; position: relative; }
     .app-hero .hero-logo {
-        width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%;
-        background: #1c1c1e; color: #fff; display: flex; align-items: center; justify-content: center;
-        font-size: 24px; box-shadow: 0 8px 20px rgba(28,28,30,.28);
+        width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 50%;
+        background: #1c1c1e; color: #f5c542; display: flex; align-items: center; justify-content: center;
+        font-size: 26px; border: 4px solid #1c1c1e; box-shadow: 5px 5px 0 rgba(28,28,30,.3);
     }
-    .app-hero .hero-title { font-size: 32px; font-weight: 800; color: #1c1c1e; margin: 0 0 6px; letter-spacing: -0.02em; }
-    .app-hero .hero-sub { font-size: 14px; color: #8c5468; font-weight: 600; margin: 0; }
-    /* 星星：紫+黄（呼应图2）· 随机闪烁 */
+    .app-hero .hero-title {
+        font-size: 30px; font-weight: 800; color: #1c1c1e; margin: 0 0 8px;
+        font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        letter-spacing: 1px; text-shadow: 3px 3px 0 #f5c542;
+    }
+    .app-hero .hero-sub { font-size: 14px; color: #a05c74; font-weight: 700; margin: 0; }
+    /* 星星：紫+黄 · 随机闪烁 */
     .app-hero .hero-star { position: absolute; font-size: 20px; animation: twinkle 2.6s ease-in-out infinite; }
     .app-hero .hero-star-l { left: 22%; top: 14px; color: #8674d6; animation-delay: 0s; animation-duration: 2.2s; }
     .app-hero .hero-star-r { right: 22%; top: 14px; color: #f5c542; animation-delay: .8s; animation-duration: 3.1s; }
@@ -78,192 +84,215 @@ st.markdown("""
         50% { opacity: 1; transform: scale(1.2) rotate(10deg); }
     }
 
-    /* ---------- 频道卡片：毛玻璃 ---------- */
+    /* ---------- 频道卡片：纯色 + 粗黑描边 + 硬阴影（卡通像素风） ---------- */
     .channel-card {
-        background: rgba(255,255,255,.72); backdrop-filter: blur(12px);
-        border: 1px solid rgba(255,255,255,.85); border-radius: 24px; padding: 24px 28px;
-        margin-bottom: 16px; box-shadow: 0 12px 32px rgba(67,48,58,.08);
+        background: #fffdf7;
+        border: 3px solid #1c1c1e; border-radius: 18px; padding: 24px 28px;
+        margin-bottom: 18px; box-shadow: 6px 6px 0 #1c1c1e;
     }
-    .channel-card:hover { box-shadow: 0 16px 40px rgba(67,48,58,.13); }
+    .channel-card:hover { box-shadow: 6px 6px 0 #1c1c1e; }
 
     .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
-    .card-name { font-size: 18px; font-weight: 800; color: #43303a; letter-spacing: -0.01em; line-height: 1.35; }
+    .card-name { font-size: 18px; font-weight: 800; color: #1c1c1e; letter-spacing: -0.01em; line-height: 1.35; }
     .card-links { text-align: right; white-space: nowrap; }
-    .card-links a { font-size: 13px; font-weight: 600; text-decoration: none; }
-    .card-links .link-home { color: #a99fc7; }
-    .card-links .link-about { color: #b8a6b1; }
+    .card-links a { font-size: 13px; font-weight: 800; text-decoration: none; }
+    .card-links .link-home { color: #8674d6; }
+    .card-links .link-about { color: #a05c74; }
 
     .rank-circle {
         display: inline-flex; align-items: center; justify-content: center;
-        width: 30px; height: 30px; border-radius: 50%; font-size: 14px; font-weight: 800;
-        background: #e9e5f2; color: #8d80b5; margin-right: 10px; flex-shrink: 0;
+        width: 32px; height: 32px; border-radius: 50%; font-size: 14px; font-weight: 800;
+        background: #f5c542; color: #1c1c1e; margin-right: 10px; flex-shrink: 0;
+        border: 3px solid #1c1c1e;
     }
 
     .score-badge {
-        display: inline-block; padding: 8px 16px; border-radius: 16px;
-        font-size: 16px; font-weight: 800; line-height: 1;
+        display: inline-block; padding: 8px 16px; border-radius: 12px;
+        font-size: 16px; font-weight: 800; line-height: 1; border: 3px solid #1c1c1e;
     }
-    .score-high { background: #e9e5f2; color: #8d80b5; }
-    .score-mid { background: #f5ecd8; color: #a8925c; }
-    .score-low { background: #f9e8ef; color: #b06a8c; }
+    .score-high { background: #8674d6; color: #fff; }
+    .score-mid { background: #f5c542; color: #1c1c1e; }
+    .score-low { background: #ffd9e3; color: #1c1c1e; }
 
     .tag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
     .cat-tag {
         display: inline-block; padding: 4px 13px; border-radius: 999px;
-        font-size: 12px; font-weight: 800; background: #f9e8ef; color: #b06a8c;
+        font-size: 12px; font-weight: 800; background: #8674d6; color: #fff;
+        border: 2px solid #1c1c1e;
     }
     .commercial-badge {
         display: inline-block; padding: 4px 13px; border-radius: 999px;
-        font-size: 12px; font-weight: 800; background: #e9e5f2; color: #8d80b5;
+        font-size: 12px; font-weight: 800; background: #f5c542; color: #1c1c1e;
+        border: 2px solid #1c1c1e;
     }
 
     .stat-grid { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
     .stat-pill {
-        flex: 1; min-width: 110px; border-radius: 16px; padding: 10px 14px;
-        font-size: 13px; font-weight: 600; color: #43303a;
+        flex: 1; min-width: 110px; border-radius: 12px; padding: 10px 14px;
+        font-size: 13px; font-weight: 700; color: #1c1c1e; border: 2px solid #1c1c1e;
     }
-    .stat-pill .k { display: block; font-size: 11px; font-weight: 600; color: #9c8794; margin-top: 2px; }
-    .stat-p1 { background: #f9e8ef; }
-    .stat-p2 { background: #e9e5f2; }
-    .stat-p3 { background: #f5ecd8; }
-    .stat-p4 { background: #f9e8ef; }
+    .stat-pill .k { display: block; font-size: 11px; font-weight: 700; color: #a05c74; margin-top: 2px; }
+    .stat-p1 { background: #ffd9e3; }
+    .stat-p2 { background: #e6e0f5; }
+    .stat-p3 { background: #fdf0cd; }
+    .stat-p4 { background: #ffd9e3; }
 
-    .email-line { font-size: 13px; color: #43303a; margin-bottom: 6px; }
+    .email-line { font-size: 13px; color: #1c1c1e; margin-bottom: 6px; }
     .email-line .email-chip {
-        display: inline-block; font-weight: 800; background: #e9e5f2; color: #8d80b5;
-        padding: 5px 14px; border-radius: 999px;
+        display: inline-block; font-weight: 800; background: #e6e0f5; color: #1c1c1e;
+        padding: 5px 14px; border-radius: 999px; border: 2px solid #1c1c1e;
     }
-    .titles-line { font-size: 12px; color: #9c8794; margin-top: 6px; line-height: 1.6; }
-    .score-detail-line { font-size: 11px; color: #b8a6b1; margin-top: 4px; }
+    .titles-line { font-size: 12px; color: #a05c74; margin-top: 6px; line-height: 1.6; font-weight: 600; }
+    .score-detail-line { font-size: 11px; color: #a05c74; margin-top: 4px; }
 
     .thumb-row { display: flex; gap: 10px; margin-top: 12px; overflow-x: auto; }
     .thumb-item { flex-shrink: 0; text-align: center; }
-    .thumb-item img { width: 130px; height: 73px; object-fit: cover; border-radius: 14px; }
-    .thumb-item span { font-size: 10px; color: #c39aa9; display: block; margin-top: 3px; }
+    .thumb-item img { width: 130px; height: 73px; object-fit: cover; border-radius: 12px; border: 3px solid #1c1c1e; }
+    .thumb-item span { font-size: 10px; color: #a05c74; display: block; margin-top: 3px; font-weight: 600; }
 
-    /* ---------- 状态标签（网红库）：低饱和 ---------- */
+    /* ---------- 状态标签（网红库）：纯色 + 黑描边 ---------- */
     .status-tag {
         display: inline-block; padding: 3px 12px; border-radius: 999px;
-        font-size: 12px; font-weight: 800;
+        font-size: 12px; font-weight: 800; border: 2px solid #1c1c1e;
     }
-    .status-new { background: #f9e8ef; color: #b06a8c; }
-    .status-emailed { background: #f5ecd8; color: #a8925c; }
-    .status-onboard { background: #e9e5f2; color: #8d80b5; }
-    .status-reject { background: #f1e9ec; color: #9c8794; }
+    .status-new { background: #8674d6; color: #fff; }
+    .status-emailed { background: #f5c542; color: #1c1c1e; }
+    .status-onboard { background: #7fd8a4; color: #1c1c1e; }
+    .status-reject { background: #ffd9e3; color: #1c1c1e; }
 
-    /* ---------- 侧边栏：浅粉半透明 ---------- */
+    /* ---------- 侧边栏：纯浅粉 + 粗黑右边框（无毛玻璃） ---------- */
     section[data-testid="stSidebar"] {
-        background-color: rgba(255,235,241,.55); backdrop-filter: blur(14px);
-        border-right: 1px solid rgba(255,255,255,.7);
+        background-color: #ffd9e3;
+        border-right: 4px solid #1c1c1e;
     }
 
-    /* ---------- 按钮：黑色胶囊（参考图2导航栏黑）· 42px高 ----------
+    /* ---------- 按钮：黑色胶囊 + 黑描边 + 硬阴影（卡通像素风）
        注意：1.60 里 button 被 tooltip span 包了三层，不是 .stButton 直接子元素，
        必须用后代选择器（空格），用 > 会完全匹配不到！ ---------- */
     .stButton button, .stDownloadButton button {
-        border-radius: 999px !important; height: 42px; padding: 0 26px; font-weight: 800;
-        border: none !important;
+        border-radius: 999px !important; height: 44px; padding: 0 26px;
+        font-weight: 800; font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        border: 3px solid #1c1c1e !important;
         background: #1c1c1e !important;
         color: #fff !important;
-        box-shadow: 0 6px 14px rgba(28,28,30,.25);
-        transition: all .15s;
+        box-shadow: 4px 4px 0 rgba(28,28,30,.35);
+        transition: all .12s;
         display: inline-flex; align-items: center; justify-content: center;
     }
     .stButton button p, .stDownloadButton button p { margin: 0; color: inherit; }
     .stButton button:hover, .stDownloadButton button:hover {
-        background: #33333a !important; color: #fff !important; transform: translateY(-1px);
-        box-shadow: 0 8px 18px rgba(28,28,30,.32);
+        background: #33333a !important; color: #fff !important;
+        box-shadow: 4px 4px 0 rgba(28,28,30,.35);
     }
-    /* ---------- 图标按钮（🔄/🗑/×）：白底黑字正圆 42×42 ---------- */
+    .stButton button:active, .stDownloadButton button:active {
+        transform: translate(3px,3px); box-shadow: none !important;
+    }
+    /* ---------- 图标按钮（🔄/🗑/×）：白底圆形 + 黑描边 + 硬阴影 ---------- */
     .stButton button[data-testid="stBaseButton-primary"] {
-        width: 42px !important; height: 42px !important; padding: 0 !important;
+        width: 44px !important; height: 44px !important; padding: 0 !important;
         border-radius: 50% !important;
         background: #fff !important;
-        color: #1c1c1e !important; border: none !important;
-        box-shadow: 0 5px 12px rgba(150,60,95,.18);
+        color: #1c1c1e !important; border: 3px solid #1c1c1e !important;
+        box-shadow: 3px 3px 0 #1c1c1e;
     }
     .stButton button[data-testid="stBaseButton-primary"]:hover {
-        background: #fdeef3 !important; color: #1c1c1e !important;
-        transform: none; box-shadow: 0 6px 14px rgba(150,60,95,.24);
+        background: #ffd9e3 !important; color: #1c1c1e !important;
+        box-shadow: 3px 3px 0 #1c1c1e;
+    }
+    .stButton button[data-testid="stBaseButton-primary"]:active {
+        transform: translate(2px,2px); box-shadow: none !important;
     }
 
-    /* ---------- Tabs：4个均分胶囊 · 白色=未选中 · 黑色=选中（参考图2导航栏） ---------- */
+    /* ---------- Tabs：4个均分胶囊 · 白底=未选中 · 黑底=选中 · 黑描边+硬阴影 ---------- */
     .stTabs [role="tablist"] {
-        gap: 10px; border-bottom: none;
+        gap: 12px; border-bottom: none;
         background: transparent; padding: 0;
         display: flex;
     }
     .stTabs [role="tab"] {
         flex: 1;
-        border-radius: 999px !important; padding: 11px 0 !important; font-weight: 800;
-        background: rgba(255,255,255,.85) !important;
-        color: #8c5468 !important; border: none !important;
+        border-radius: 999px !important; padding: 11px 0 !important;
+        font-weight: 800; font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        background: #fff !important;
+        color: #1c1c1e !important; border: 3px solid #1c1c1e !important;
         justify-content: center;
-        box-shadow: 0 4px 12px rgba(150,60,95,.10);
-        transition: all .18s;
+        box-shadow: 4px 4px 0 #1c1c1e;
+        transition: all .12s;
     }
-    .stTabs [role="tab"]:hover { background: #fff !important; color: #2b2028 !important; }
+    .stTabs [role="tab"]:hover { background: #ffd9e3 !important; color: #1c1c1e !important; }
     .stTabs [role="tab"][aria-selected="true"] {
         background: #1c1c1e !important;
-        color: #ffffff !important; border-color: transparent !important;
-        box-shadow: 0 8px 18px rgba(28,28,30,.30);
+        color: #ffffff !important;
+        box-shadow: 4px 4px 0 rgba(28,28,30,.35);
     }
     .stTabs [role="tab"] p { color: inherit; }
     /* 隐藏默认下划线指示器（1.60 新结构） */
     .stTabs .react-aria-SelectionIndicator { display: none !important; }
 
-    /* ---------- 指标卡：毛玻璃 ---------- */
+    /* ---------- 指标卡：纯色 + 黑描边 + 硬阴影 ---------- */
     div[data-testid="stMetric"] {
-        background: rgba(255,255,255,.72); backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,.85); border-radius: 18px; padding: 16px 20px;
-        box-shadow: 0 8px 24px rgba(67,48,58,.06);
+        background: #fffdf7;
+        border: 3px solid #1c1c1e; border-radius: 14px; padding: 16px 20px;
+        box-shadow: 4px 4px 0 #1c1c1e;
     }
-    div[data-testid="stMetricLabel"] { color: #9c8794; font-weight: 600; }
-    div[data-testid="stMetricValue"] { color: #43303a; font-weight: 800; }
+    div[data-testid="stMetricLabel"] { color: #a05c74; font-weight: 700; }
+    div[data-testid="stMetricValue"] {
+        color: #1c1c1e; font-weight: 800;
+        font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+    }
 
-    /* ---------- 输入框/数字框：胶囊 · 焦点雾灰紫 ---------- */
+    /* ---------- 输入框/数字框：白底 + 黑描边 + 硬阴影 ---------- */
     .stTextInput input, .stNumberInput input {
-        border-radius: 999px !important; height: 42px;
-        border: 1.5px solid #f0d9e3; background: rgba(255,255,255,.85);
+        border-radius: 12px !important; height: 44px;
+        border: 3px solid #1c1c1e !important; background: #fff !important;
+        box-shadow: 3px 3px 0 #1c1c1e; font-weight: 700;
     }
     .stTextArea textarea {
-        border-radius: 18px !important;
-        border: 1.5px solid #f0d9e3; background: rgba(255,255,255,.85);
+        border-radius: 14px !important;
+        border: 3px solid #1c1c1e !important; background: #fff !important;
+        box-shadow: 3px 3px 0 #1c1c1e;
     }
     .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
-        border-color: #a99fc7; box-shadow: 0 0 0 3px rgba(169,159,199,.22);
+        border-color: #8674d6 !important; box-shadow: 3px 3px 0 #8674d6;
     }
-    /* 数字框：隐藏 −/+ 按钮（1.60 改名为 stNumberInputStepUp/Down），变干净纯胶囊 */
+    /* 数字框：隐藏 −/+ 按钮（1.60 改名为 stNumberInputStepUp/Down） */
     [data-testid="stNumberInputStepUp"], [data-testid="stNumberInputStepDown"] {
         display: none !important;
     }
     .stNumberInput input { padding-right: 20px !important; }
-    /* ---------- 下拉框/多选框：胶囊（1.60 React Aria ComboBox 结构） ---------- */
+    /* ---------- 下拉框/多选框：白底 + 黑描边 + 硬阴影（1.60 React Aria 结构） ---------- */
     [data-testid="stSelectbox"] [role="group"],
     [data-testid="stMultiSelect"] [role="group"],
     div[data-baseweb="select"] > div {
-        border-radius: 999px !important; min-height: 42px;
-        border: 1.5px solid #f0d9e3 !important; background: rgba(255,255,255,.85) !important;
+        border-radius: 12px !important; min-height: 44px;
+        border: 3px solid #1c1c1e !important; background: #fff !important;
+        box-shadow: 3px 3px 0 #1c1c1e; font-weight: 700;
     }
-    div[data-baseweb="popover"] > ul { border-radius: 16px; }
+    div[data-baseweb="popover"] > ul { border-radius: 14px; border: 3px solid #1c1c1e; }
 
     /* ---------- 滑杆：颜色由 .streamlit/config.toml 的 primaryColor 统一控制（雾灰紫），
        旧的 data-baseweb="slider" 选择器在 1.60 已失效，无需再写 ---------- */
 
-    /* ---------- 提示条 / 展开器 / 代码块：统一圆角 ---------- */
-    div[data-testid="stAlert"], .stAlert { border-radius: 16px !important; }
+    /* ---------- 提示条 / 展开器 / 代码块：黑描边 + 硬阴影 ---------- */
+    div[data-testid="stAlert"], .stAlert {
+        border-radius: 14px !important; border: 3px solid #1c1c1e !important;
+        box-shadow: 4px 4px 0 rgba(28,28,30,.25);
+    }
     /* 1.60: stExpander 的 testid 从 <details> 挪到外层 <div>，选择器不限定标签 */
     [data-testid="stExpander"] {
-        border-radius: 18px !important; border: 1.5px solid #f0d9e3 !important;
-        background: rgba(255,255,255,.5) !important;
+        border-radius: 14px !important; border: 3px solid #1c1c1e !important;
+        background: #fffdf7 !important; box-shadow: 4px 4px 0 rgba(28,28,30,.25);
     }
-    /* 展开器里的删除小圆按钮（词库×）：缩到28px，不占地方（1.60: 后代选择器） */
+    /* 展开器里的删除小圆按钮（词库×）：缩到30px */
     [data-testid="stExpander"] .stButton button[data-testid="stBaseButton-primary"] {
-        width: 28px !important; height: 28px !important; font-size: 13px;
+        width: 30px !important; height: 30px !important; font-size: 13px;
     }
-    pre { border-radius: 14px !important; }
+    pre {
+        border-radius: 12px !important; border: 3px solid #1c1c1e !important;
+        background: #ffd9e3 !important;
+    }
 
-    hr { border-color: #f0d9e3; }
+    hr { border-color: #1c1c1e; border-width: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
