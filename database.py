@@ -12,6 +12,7 @@ class InfluencerDB:
 
     TABLE_NAME = "influencers"
     MEMBERS_TABLE = "members"  # 团队成员名单（只存名字，方便下拉选择）
+    KEYWORDS_TABLE = "keywords"  # 团队自定义关键词库（可增删，全队共享）
 
     def __init__(self, url: str, key: str):
         """
@@ -282,6 +283,76 @@ class InfluencerDB:
             self.client.table(self.MEMBERS_TABLE).insert(
                 {"name": name, "joined_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
             ).execute()
+            return True
+        except Exception:
+            return False
+
+    # ============================================================
+    # 关键词库（可增删 · 全队共享）
+    # ============================================================
+
+    def get_keywords(self) -> dict[str, list[str]]:
+        """读取公共库里的关键词，返回 {垂类: [关键词, ...]}"""
+        try:
+            result = (
+                self.client.table(self.KEYWORDS_TABLE)
+                .select("*")
+                .order("id")
+                .execute()
+            )
+            kw_map: dict[str, list[str]] = {}
+            for r in (result.data or []):
+                cat = r.get("category", "")
+                kw = r.get("keyword", "")
+                if cat and kw:
+                    kw_map.setdefault(cat, [])
+                    if kw not in kw_map[cat]:
+                        kw_map[cat].append(kw)
+            return kw_map
+        except Exception:
+            return {}
+
+    def add_keyword(self, category: str, keyword: str) -> bool:
+        """添加一个关键词到公共库"""
+        category = (category or "").strip()
+        keyword = (keyword or "").strip()
+        if not category or not keyword:
+            return False
+        try:
+            self.client.table(self.KEYWORDS_TABLE).insert(
+                {"category": category, "keyword": keyword,
+                 "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            ).execute()
+            return True
+        except Exception:
+            return False
+
+    def delete_keyword(self, category: str, keyword: str) -> bool:
+        """从公共库删除一个关键词"""
+        try:
+            (
+                self.client.table(self.KEYWORDS_TABLE)
+                .delete()
+                .eq("category", category)
+                .eq("keyword", keyword)
+                .execute()
+            )
+            return True
+        except Exception:
+            return False
+
+    def seed_keywords(self, default_library: dict[str, list[str]]) -> bool:
+        """第一次使用时，把内置默认词库批量写入公共库"""
+        rows = [
+            {"category": cat, "keyword": kw,
+             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            for cat, kws in default_library.items()
+            for kw in kws
+        ]
+        if not rows:
+            return False
+        try:
+            self.client.table(self.KEYWORDS_TABLE).insert(rows).execute()
             return True
         except Exception:
             return False

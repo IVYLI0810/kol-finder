@@ -36,21 +36,21 @@ st.set_page_config(
 )
 
 # ============================================================
-# 粉黑星星风样式（多巴胺 · 甜酷粉）
+# 低饱和毛玻璃风样式（雾感粉 · 毛玻璃 · 星星闪烁）
 # ============================================================
 
 st.markdown("""
 <style>
-    /* ---------- 全局底色：粉色渐变 ---------- */
+    /* ---------- 全局底色：低饱和粉渐变 · 钉在屏幕上（滚动也铺满） ---------- */
     .stApp {
-        background: linear-gradient(160deg, #fbe4ee 0%, #f6cddd 100%);
+        background: linear-gradient(160deg, #fdf1f6 0%, #f7e2ec 100%);
         background-attachment: fixed;
     }
     footer { visibility: hidden; }
 
     h1, h2, h3, h4 {
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Inter', 'PingFang SC', sans-serif;
-        color: #2b1c22; font-weight: 800; letter-spacing: -0.01em;
+        color: #43303a; font-weight: 800; letter-spacing: -0.01em;
     }
     p, span, div, label, td, th, a, li {
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', 'PingFang SC', sans-serif;
@@ -60,136 +60,211 @@ st.markdown("""
     .app-hero { text-align: center; padding: 8px 0 4px; position: relative; }
     .app-hero .hero-logo {
         width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%;
-        background: #2b1c22; color: #fff; display: flex; align-items: center; justify-content: center;
-        font-size: 24px; box-shadow: 0 8px 20px rgba(43,28,34,.25);
+        background: rgba(67,48,58,.88); color: #fff; display: flex; align-items: center; justify-content: center;
+        font-size: 24px; box-shadow: 0 8px 20px rgba(67,48,58,.22); backdrop-filter: blur(8px);
     }
-    .app-hero .hero-title { font-size: 32px; font-weight: 800; color: #2b1c22; margin: 0 0 6px; letter-spacing: -0.02em; }
-    .app-hero .hero-sub { font-size: 14px; color: #96707f; font-weight: 500; margin: 0; }
-    .app-hero .hero-star { position: absolute; top: 14px; font-size: 20px; }
-    .app-hero .hero-star-l { left: 22%; color: #a78bfa; transform: rotate(-12deg); }
-    .app-hero .hero-star-r { right: 22%; color: #ffcf5c; transform: rotate(10deg); font-size: 24px; }
+    .app-hero .hero-title { font-size: 32px; font-weight: 800; color: #43303a; margin: 0 0 6px; letter-spacing: -0.02em; }
+    .app-hero .hero-sub { font-size: 14px; color: #9c8794; font-weight: 500; margin: 0; }
+    /* 星星：随机闪烁（每颗延迟/周期不同，看起来像随机眨眼睛） */
+    .app-hero .hero-star { position: absolute; font-size: 20px; animation: twinkle 2.6s ease-in-out infinite; }
+    .app-hero .hero-star-l { left: 22%; top: 14px; color: #a99fc7; animation-delay: 0s; animation-duration: 2.2s; }
+    .app-hero .hero-star-r { right: 22%; top: 14px; color: #f2e3c0; animation-delay: .8s; animation-duration: 3.1s; }
+    .app-hero .hero-star-2 { left: 30%; top: 66px; color: #f2e3c0; font-size: 14px; animation-delay: 1.4s; animation-duration: 2.7s; }
+    .app-hero .hero-star-3 { right: 30%; top: 70px; color: #a99fc7; font-size: 15px; animation-delay: .4s; animation-duration: 3.4s; }
+    .app-hero .hero-star-4 { left: 16%; top: 52px; color: #eec3d4; font-size: 13px; animation-delay: 1.9s; animation-duration: 2.4s; }
+    .app-hero .hero-star-5 { right: 15%; top: 48px; color: #f2e3c0; font-size: 12px; animation-delay: 1.1s; animation-duration: 2.9s; }
+    @keyframes twinkle {
+        0%, 100% { opacity: .2; transform: scale(.75) rotate(-10deg); }
+        50% { opacity: 1; transform: scale(1.2) rotate(10deg); }
+    }
 
-    /* ---------- 频道卡片 ---------- */
+    /* ---------- 频道卡片：毛玻璃 ---------- */
     .channel-card {
-        background: #ffffff; border-radius: 24px; padding: 24px 28px;
-        margin-bottom: 16px; box-shadow: 0 12px 32px rgba(43,28,34,.10);
+        background: rgba(255,255,255,.72); backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,.85); border-radius: 24px; padding: 24px 28px;
+        margin-bottom: 16px; box-shadow: 0 12px 32px rgba(67,48,58,.08);
     }
-    .channel-card:hover { box-shadow: 0 16px 40px rgba(43,28,34,.14); }
+    .channel-card:hover { box-shadow: 0 16px 40px rgba(67,48,58,.13); }
 
     .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
-    .card-name { font-size: 18px; font-weight: 800; color: #2b1c22; letter-spacing: -0.01em; line-height: 1.35; }
+    .card-name { font-size: 18px; font-weight: 800; color: #43303a; letter-spacing: -0.01em; line-height: 1.35; }
     .card-links { text-align: right; white-space: nowrap; }
     .card-links a { font-size: 13px; font-weight: 600; text-decoration: none; }
-    .card-links .link-home { color: #7c5ce0; }
-    .card-links .link-about { color: #c39aa9; }
+    .card-links .link-home { color: #a99fc7; }
+    .card-links .link-about { color: #b8a6b1; }
 
     .rank-circle {
         display: inline-flex; align-items: center; justify-content: center;
         width: 30px; height: 30px; border-radius: 50%; font-size: 14px; font-weight: 800;
-        background: #efe9ff; color: #7c5ce0; margin-right: 10px; flex-shrink: 0;
+        background: #e9e5f2; color: #8d80b5; margin-right: 10px; flex-shrink: 0;
     }
 
     .score-badge {
         display: inline-block; padding: 8px 16px; border-radius: 16px;
         font-size: 16px; font-weight: 800; line-height: 1;
     }
-    .score-high { background: #efe9ff; color: #7c5ce0; }
-    .score-mid { background: #fff3d6; color: #c08a00; }
-    .score-low { background: #fdeef4; color: #c2557f; }
+    .score-high { background: #e9e5f2; color: #8d80b5; }
+    .score-mid { background: #f5ecd8; color: #a8925c; }
+    .score-low { background: #f9e8ef; color: #b06a8c; }
 
     .tag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
     .cat-tag {
         display: inline-block; padding: 4px 13px; border-radius: 999px;
-        font-size: 12px; font-weight: 800; background: #fdeef4; color: #c2557f;
+        font-size: 12px; font-weight: 800; background: #f9e8ef; color: #b06a8c;
     }
     .commercial-badge {
         display: inline-block; padding: 4px 13px; border-radius: 999px;
-        font-size: 12px; font-weight: 800; background: #efe9ff; color: #7c5ce0;
+        font-size: 12px; font-weight: 800; background: #e9e5f2; color: #8d80b5;
     }
 
     .stat-grid { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
     .stat-pill {
         flex: 1; min-width: 110px; border-radius: 16px; padding: 10px 14px;
-        font-size: 13px; font-weight: 600; color: #2b1c22;
+        font-size: 13px; font-weight: 600; color: #43303a;
     }
-    .stat-pill .k { display: block; font-size: 11px; font-weight: 600; color: #96707f; margin-top: 2px; }
-    .stat-p1 { background: #fdeef4; }
-    .stat-p2 { background: #efe9ff; }
-    .stat-p3 { background: #fff3d6; }
-    .stat-p4 { background: #fdeef4; }
+    .stat-pill .k { display: block; font-size: 11px; font-weight: 600; color: #9c8794; margin-top: 2px; }
+    .stat-p1 { background: #f9e8ef; }
+    .stat-p2 { background: #e9e5f2; }
+    .stat-p3 { background: #f5ecd8; }
+    .stat-p4 { background: #f9e8ef; }
 
-    .email-line { font-size: 13px; color: #2b1c22; margin-bottom: 6px; }
+    .email-line { font-size: 13px; color: #43303a; margin-bottom: 6px; }
     .email-line .email-chip {
-        display: inline-block; font-weight: 800; background: #efe9ff; color: #7c5ce0;
+        display: inline-block; font-weight: 800; background: #e9e5f2; color: #8d80b5;
         padding: 5px 14px; border-radius: 999px;
     }
-    .titles-line { font-size: 12px; color: #96707f; margin-top: 6px; line-height: 1.6; }
-    .score-detail-line { font-size: 11px; color: #c39aa9; margin-top: 4px; }
+    .titles-line { font-size: 12px; color: #9c8794; margin-top: 6px; line-height: 1.6; }
+    .score-detail-line { font-size: 11px; color: #b8a6b1; margin-top: 4px; }
 
     .thumb-row { display: flex; gap: 10px; margin-top: 12px; overflow-x: auto; }
     .thumb-item { flex-shrink: 0; text-align: center; }
     .thumb-item img { width: 130px; height: 73px; object-fit: cover; border-radius: 14px; }
     .thumb-item span { font-size: 10px; color: #c39aa9; display: block; margin-top: 3px; }
 
-    /* ---------- 状态标签（网红库） ---------- */
+    /* ---------- 状态标签（网红库）：低饱和 ---------- */
     .status-tag {
         display: inline-block; padding: 3px 12px; border-radius: 999px;
         font-size: 12px; font-weight: 800;
     }
-    .status-new { background: #fdeef4; color: #c2557f; }
-    .status-emailed { background: #fff3d6; color: #c08a00; }
-    .status-onboard { background: #efe9ff; color: #7c5ce0; }
-    .status-reject { background: #f1e9ec; color: #96707f; }
+    .status-new { background: #f9e8ef; color: #b06a8c; }
+    .status-emailed { background: #f5ecd8; color: #a8925c; }
+    .status-onboard { background: #e9e5f2; color: #8d80b5; }
+    .status-reject { background: #f1e9ec; color: #9c8794; }
 
     /* ---------- 侧边栏 ---------- */
     section[data-testid="stSidebar"] {
-        background-color: #fffdf9; border-right: 1px solid #f3d3e0;
+        background-color: rgba(255,253,250,.6); border-right: 1px solid #f0d9e3;
     }
 
-    /* ---------- 按钮：黑色胶囊 ---------- */
+    /* ---------- 按钮：白色半透明毛玻璃胶囊 · 42px高 ---------- */
     .stButton > button, .stDownloadButton > button {
-        border-radius: 999px; padding: 10px 26px; font-weight: 800;
-        border: none; background-color: #2b1c22; color: #ffffff;
-        box-shadow: 0 5px 14px rgba(43,28,34,.25);
+        border-radius: 999px; height: 42px; padding: 0 26px; font-weight: 800;
+        border: 1px solid rgba(255,255,255,.85);
+        background: rgba(255,255,255,.55); backdrop-filter: blur(12px);
+        color: #43303a;
+        box-shadow: 0 4px 12px rgba(67,48,58,.08);
         transition: all .15s;
+        display: inline-flex; align-items: center; justify-content: center;
     }
+    .stButton > button p, .stDownloadButton > button p { margin: 0; color: inherit; }
     .stButton > button:hover, .stDownloadButton > button:hover {
-        background-color: #3d2b33; color: #ffffff; transform: translateY(-1px);
-        box-shadow: 0 8px 18px rgba(43,28,34,.3);
+        background: rgba(255,255,255,.85); color: #43303a; transform: translateY(-1px);
+        box-shadow: 0 7px 16px rgba(67,48,58,.14);
+    }
+    /* ---------- 图标按钮（🔄/🗑）：正圆毛玻璃 42×42 ---------- */
+    .stButton > button[kind="primary"],
+    .stButton > button[data-testid="baseButton-primary"] {
+        width: 42px; height: 42px; padding: 0; border-radius: 50%;
+        background: rgba(255,255,255,.7); backdrop-filter: blur(8px);
+        color: #9c8794; border: 1px solid #f0d9e3;
+        box-shadow: none;
+    }
+    .stButton > button[kind="primary"]:hover,
+    .stButton > button[data-testid="baseButton-primary"]:hover {
+        background: #f9e8ef; color: #b06a8c; border-color: #eec3d4;
+        transform: none; box-shadow: 0 4px 10px rgba(67,48,58,.10);
     }
 
-    /* ---------- Tabs：选中=黑底白字 ---------- */
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; border-bottom: none; }
+    /* ---------- Tabs：4个均分毛玻璃按钮 · 选中=深梅玻璃 ---------- */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px; border-bottom: none;
+        background: transparent; padding: 0;
+    }
     .stTabs [data-baseweb="tab"] {
-        border-radius: 999px; padding: 8px 22px; font-weight: 700;
-        background: #fdeef4; color: #2b1c22; border: 2px solid transparent;
+        border-radius: 999px; padding: 11px 0; font-weight: 800;
+        background: rgba(255,255,255,.55); backdrop-filter: blur(12px);
+        color: #9c8794; border: 1px solid rgba(255,255,255,.85);
+        flex: 1; justify-content: center;
+        box-shadow: 0 4px 12px rgba(67,48,58,.06);
     }
-    .stTabs [aria-selected="true"] {
-        background: #2b1c22 !important; color: #ffffff !important;
-        box-shadow: 0 4px 12px rgba(43,28,34,.25);
+    .stTabs [data-baseweb="tab"]:hover { background: rgba(255,255,255,.85); color: #43303a; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background: rgba(67,48,58,.88) !important; backdrop-filter: blur(12px);
+        color: #ffffff !important; border-color: transparent !important;
+        box-shadow: 0 6px 16px rgba(67,48,58,.25);
     }
-    .stTabs [data-baseweb="tab-highlight"] { background-color: transparent; }
+    .stTabs [data-baseweb="tab"] p { color: inherit; }
+    .stTabs [data-baseweb="tab-highlight"] { display: none; background-color: transparent; }
 
-    /* ---------- 指标卡 ---------- */
+    /* ---------- 指标卡：毛玻璃 ---------- */
     div[data-testid="stMetric"] {
-        background: #ffffff; border-radius: 18px; padding: 16px 20px;
-        box-shadow: 0 8px 24px rgba(43,28,34,.08);
+        background: rgba(255,255,255,.72); backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,.85); border-radius: 18px; padding: 16px 20px;
+        box-shadow: 0 8px 24px rgba(67,48,58,.06);
     }
-    div[data-testid="stMetricLabel"] { color: #96707f; font-weight: 600; }
-    div[data-testid="stMetricValue"] { color: #2b1c22; font-weight: 800; }
+    div[data-testid="stMetricLabel"] { color: #9c8794; font-weight: 600; }
+    div[data-testid="stMetricValue"] { color: #43303a; font-weight: 800; }
 
-    /* ---------- 输入框 / 选择框 ---------- */
-    .stTextInput > div > div > input, .stTextArea > div > div > textarea {
-        border-radius: 16px; border: 2px solid #f3d3e0; background: #ffffff;
+    /* ---------- 输入框/数字框：胶囊 · 焦点雾灰紫 ---------- */
+    .stTextInput input, .stNumberInput input {
+        border-radius: 999px !important; height: 42px;
+        border: 1.5px solid #f0d9e3; background: rgba(255,255,255,.85);
     }
-    .stTextInput > div > div > input:focus, .stTextArea > div > div > textarea:focus {
-        border-color: #2b1c22; box-shadow: 0 4px 14px rgba(43,28,34,.12);
+    .stTextArea textarea {
+        border-radius: 18px !important;
+        border: 1.5px solid #f0d9e3; background: rgba(255,255,255,.85);
     }
+    .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
+        border-color: #a99fc7; box-shadow: 0 0 0 3px rgba(169,159,199,.22);
+    }
+    /* 数字框：隐藏 −/+ 按钮，变干净纯胶囊 */
+    .stNumberInput button[title="step up"], .stNumberInput button[title="step down"],
+    .stNumberInput [data-testid="stNumberInput"] button,
+    .stNumberInput button[kind="header"], .stNumberInput button[kind="footer"] {
+        display: none !important;
+    }
+    .stNumberInput input { padding-right: 20px !important; }
+    /* ---------- 下拉框/多选框：胶囊 ---------- */
     div[data-baseweb="select"] > div {
-        border-radius: 16px; border: 2px solid #f3d3e0; background: #ffffff;
+        border-radius: 999px !important; min-height: 42px;
+        border: 1.5px solid #f0d9e3 !important; background: rgba(255,255,255,.85) !important;
+    }
+    div[data-baseweb="popover"] > ul { border-radius: 16px; }
+
+    /* ---------- 滑杆：雾灰紫轨道 + 深梅圆钮 ---------- */
+    .stSlider [data-baseweb="slider"] > div > div { border-radius: 999px; }
+    .stSlider [data-baseweb="slider"] > div > div:nth-child(2) {
+        background: linear-gradient(90deg, #a99fc7, #c4bcdc) !important;
+    }
+    .stSlider [data-baseweb="slider"] div[tabindex="0"] {
+        background-color: #43303a !important; border: 3px solid #fff !important;
+        border-radius: 50% !important; box-shadow: 0 3px 8px rgba(67,48,58,.3) !important;
     }
 
-    hr { border-color: #f3d3e0; }
+    /* ---------- 提示条 / 展开器 / 代码块：统一圆角 ---------- */
+    div[data-testid="stAlert"], .stAlert { border-radius: 16px !important; }
+    details[data-testid="stExpander"] {
+        border-radius: 18px !important; border: 1.5px solid #f0d9e3 !important;
+        background: rgba(255,255,255,.5) !important;
+    }
+    /* 展开器里的删除小圆按钮（词库×）：缩到28px，不占地方 */
+    details[data-testid="stExpander"] .stButton > button[kind="primary"],
+    details[data-testid="stExpander"] .stButton > button[data-testid="baseButton-primary"] {
+        width: 28px; height: 28px; font-size: 13px;
+    }
+    pre { border-radius: 14px !important; }
+
+    hr { border-color: #f0d9e3; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -303,6 +378,24 @@ def get_all_records() -> list[dict]:
     return st.session_state.local_db
 
 
+def get_full_keyword_library() -> dict:
+    """
+    获取完整关键词库（全队共享版）。
+    优先用公共库里的（大家可以随时增删）；
+    公共库表还是空的（第一次用）→ 自动把内置默认词库写进去；
+    连不上公共库 → 退回内置默认词库，保证随时有词可用。
+    """
+    db = get_db()
+    if db:
+        db_kws = db.get_keywords()
+        if db_kws:
+            return db_kws
+        # 表是空的（第一次使用），用内置默认词库初始化一次
+        db.seed_keywords(KEYWORD_LIBRARY)
+        return KEYWORD_LIBRARY
+    return KEYWORD_LIBRARY
+
+
 # ============================================================
 # 侧边栏
 # ============================================================
@@ -332,10 +425,12 @@ with st.sidebar:
         default_idx = len(display_members)  # 默认落在"新成员"
 
     chosen = st.selectbox("你是谁？", options, index=default_idx, key="who_select")
+    st.caption("👆 老成员：直接点开选自己的名字；新成员：选「我是新成员」")
 
     if chosen == NEW:
         new_name = st.text_input("输入你的名字", key="new_name_input",
                                  placeholder="例如：小美")
+        st.caption("✍️ 只有第一次用才需要输，点下面「记住我」后，下次直接选名字")
         if st.button("✅ 记住我", key="save_name", use_container_width=True):
             if new_name.strip():
                 if db_for_members:
@@ -372,12 +467,13 @@ with st.sidebar:
 
     # ---------- 公共库：已写死在代码里，只显示状态 ----------
     st.markdown("")
-    st.markdown("#### 🗄 公共库")
+    st.markdown("#### 🗄 团队公共库")
     db = get_db()
     if SUPABASE_KEY == "PASTE_YOUR_ANON_KEY_HERE":
         st.warning("⚠️ 还没配置公共库，请联系管理员填Key")
     elif db:
-        st.success("✅ 已连接（自动配置，不用填）")
+        st.success("✅ 已连上，全队共享")
+        st.caption("大家挖到的博主都存在这里，自动同步、自动去重，不用你配置。")
     else:
         st.error("❌ 连接失败，请联系管理员")
 
@@ -393,17 +489,24 @@ with st.sidebar:
         st.warning("⚠️ 配额即将用完")
 
     st.markdown("")
-    st.caption("KOL Finder v2.1 · 粉黑星星风")
+    st.caption("KOL Finder v3.0 · 低饱和毛玻璃")
 
 
 # ============================================================
 # 主区域
 # ============================================================
 
+# 完整关键词库（全队共享版，只读一次，供下面所有页面用）
+KW_LIB = get_full_keyword_library()
+
 st.markdown("""
 <div class="app-hero">
     <span class="hero-star hero-star-l">✦</span>
     <span class="hero-star hero-star-r">✦</span>
+    <span class="hero-star hero-star-2">✦</span>
+    <span class="hero-star hero-star-3">✦</span>
+    <span class="hero-star hero-star-4">✦</span>
+    <span class="hero-star hero-star-5">✦</span>
     <div class="hero-logo">✦</div>
     <div class="hero-title">KOL Finder</div>
     <div class="hero-sub">韩国 YouTube 网红挖掘 · 自动验证活跃 · 智能评分 · 公共库去重</div>
@@ -429,13 +532,13 @@ with tab_search:
     else:
         # ---------- 垂类选择 ----------
         category_select = st.selectbox(
-            "垂类", options=list(KEYWORD_LIBRARY.keys()),
+            "垂类", options=list(KW_LIB.keys()),
             help="切换垂类后，下方推荐关键词会跟着变",
         )
 
         # ---------- 推荐关键词 · 一键点选 ----------
         st.markdown("✨ **推荐关键词** · 点击任意一个直接搜索")
-        chip_kws = KEYWORD_LIBRARY[category_select]
+        chip_kws = KW_LIB[category_select]
         for row_start in range(0, len(chip_kws), 3):
             chip_cols = st.columns(3)
             for j, kw in enumerate(chip_kws[row_start:row_start + 3]):
@@ -494,7 +597,7 @@ with tab_search:
 
         # 批量搜索
         if batch_btn:
-            keywords = KEYWORD_LIBRARY[category_select]
+            keywords = KW_LIB[category_select]
             all_results = []
             progress = st.progress(0)
             status_text = st.empty()
@@ -720,12 +823,19 @@ with tab_database:
         st.markdown("")
 
         # 筛选
-        col_f1, col_f2, col_f3 = st.columns(3)
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             filter_status = st.selectbox("状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"])
         with col_f2:
-            filter_cat = st.multiselect("垂类", options=list(KEYWORD_LIBRARY.keys()), default=[])
+            filter_cat = st.multiselect("垂类", options=list(KW_LIB.keys()), default=[])
         with col_f3:
+            # 挖掘人筛选：全部 / 只看我的 / 各个挖过博主的同事名字（自动从记录收集）
+            discoverers = sorted({r.get("discovered_by", "") for r in records if r.get("discovered_by")})
+            filter_discoverer = st.selectbox(
+                "👤 挖掘人", ["全部", "只看我的"] + discoverers,
+                help="「只看我的」= 只显示你挖的博主；也可以选同事名字看 TA 挖了谁",
+            )
+        with col_f4:
             db_sort = st.selectbox("排序", ["添加时间", "评分", "订阅量", "最近更新"], key="db_sort")
 
         filtered_db = records
@@ -733,6 +843,10 @@ with tab_database:
             filtered_db = [r for r in filtered_db if r.get("status") == filter_status]
         if filter_cat:
             filtered_db = [r for r in filtered_db if r.get("category") in filter_cat]
+        if filter_discoverer == "只看我的":
+            filtered_db = [r for r in filtered_db if r.get("discovered_by") == st.session_state.user_name]
+        elif filter_discoverer != "全部":
+            filtered_db = [r for r in filtered_db if r.get("discovered_by") == filter_discoverer]
 
         sort_map = {
             "添加时间": lambda x: x.get("added_date", ""),
@@ -783,7 +897,7 @@ with tab_database:
             """, unsafe_allow_html=True)
 
             # 操作
-            col_s1, col_s2, col_s3, col_s4 = st.columns([1.5, 1, 1, 3])
+            col_s1, col_s2, col_s3, col_s4 = st.columns([1.8, 0.6, 0.6, 5])
             with col_s1:
                 new_status = st.selectbox(
                     "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
@@ -803,7 +917,7 @@ with tab_database:
                                 lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                     st.rerun()
             with col_s2:
-                if st.button("🔄", key=f"rc_{idx}", help="复查活跃度"):
+                if st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary"):
                     if st.session_state.api_key:
                         with st.spinner("复查中..."):
                             ch_copy = dict(rec)
@@ -827,7 +941,7 @@ with tab_database:
                     else:
                         st.error("需要API Key")
             with col_s3:
-                if st.button("🗑", key=f"rm_{idx}", help="从库中移除"):
+                if st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary"):
                     db = get_db()
                     cid = rec.get("channel_id", "")
                     if db:
@@ -1024,10 +1138,31 @@ with tab_settings:
         }
         st.success("✅ 设置已保存")
 
-    # 关键词库展示
+    # 关键词库（可增删 · 全队共享）
     st.markdown("")
     st.markdown("#### 📝 预置关键词库")
-    for cat, kws in KEYWORD_LIBRARY.items():
+    st.caption("➕➖ 随时增删，改动存进公共库，全队 10 个人同步共享")
+    db_kw = get_db()
+    for cat, kws in KW_LIB.items():
         with st.expander(f"{cat}（{len(kws)}个）"):
             for kw in kws:
-                st.caption(f"• {kw}")
+                c_del, c_kw = st.columns([0.4, 9.6])
+                with c_del:
+                    if st.button("×", key=f"kwdel_{cat}_{kw}", type="primary",
+                                 help=f"删除「{kw}」"):
+                        if db_kw and db_kw.delete_keyword(cat, kw):
+                            st.rerun()
+                with c_kw:
+                    st.caption(f"• {kw}")
+            st.markdown("")
+            c_in, c_btn = st.columns([4, 1])
+            with c_in:
+                new_kw = st.text_input(
+                    "新关键词", key=f"kwnew_{cat}",
+                    placeholder="输入新关键词…", label_visibility="collapsed",
+                )
+            with c_btn:
+                if st.button("➕ 添加", key=f"kwadd_{cat}", use_container_width=True):
+                    if new_kw.strip():
+                        if db_kw and db_kw.add_keyword(cat, new_kw.strip()):
+                            st.rerun()
