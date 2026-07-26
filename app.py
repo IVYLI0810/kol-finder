@@ -292,6 +292,23 @@ st.markdown("""
         display: none !important;
     }
     .stNumberInput input { padding-right: 20px !important; }
+    /* ---------- 密码框（API Key）：眼睛图标和输入框在同一个 flex 容器里，
+       默认描边只画在 input 上，右侧眼睛图标那段没描边（胶囊断裂）。
+       解决：把描边挪到外层容器，眼睛图标也圈进同一个白底胶囊；
+       内层 input 去掉自己的描边，高度留给外层边框。 ---------- */
+    [data-testid="stTextInputRootElement"]:has(input[type="password"]) {
+        border: 3px solid #1c1c1e !important; border-radius: 12px !important;
+        background: #fff !important; box-shadow: 3px 3px 0 #1c1c1e;
+        height: 44px; align-items: center;
+    }
+    [data-testid="stTextInputRootElement"]:has(input[type="password"]) input {
+        border: none !important; box-shadow: none !important;
+        background: transparent !important; border-radius: 0 !important;
+        height: 38px !important;
+    }
+    [data-testid="stTextInputRootElement"]:has(input[type="password"]):focus-within {
+        border-color: #8674d6 !important; box-shadow: 3px 3px 0 #8674d6;
+    }
     /* ---------- 下拉框/多选框：白底 + 黑描边 + 硬阴影（1.60 React Aria 结构） ---------- */
     [data-testid="stSelectbox"] [role="group"],
     [data-testid="stMultiSelect"] [role="group"],
