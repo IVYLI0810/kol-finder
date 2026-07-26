@@ -168,27 +168,27 @@ st.markdown("""
         background: #fffdf7;
         border: 3px solid #1c1c1e; border-radius: 18px;
         box-shadow: 6px 6px 0 #1c1c1e;
-        padding: 10px;
+        padding: 14px;
     }
     /* 卡片内部紧凑排版（卡片变窄，内容要小） */
     .kol-name { font-size: 15px; font-weight: 800; color: #1c1c1e; line-height: 1.3; word-break: break-word; }
     .kol-home { font-size: 12px; font-weight: 800; color: #8674d6; text-decoration: none; white-space: nowrap; }
-    .kol-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
-    .kol-stats { font-size: 12px; color: #1c1c1e; margin-top: 6px; font-weight: 700; }
-    .kol-sub { font-size: 11px; color: #a05c74; margin-top: 2px; font-weight: 600; }
-    .kol-email { margin-top: 4px; font-size: 12px; }
-    .kol-email .email-chip { font-size: 11px; padding: 2px 9px; }
+    .kol-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .kol-stats { font-size: 12px; color: #1c1c1e; margin-top: 8px; font-weight: 700; }
+    .kol-sub { font-size: 11px; color: #a05c74; margin-top: 8px; font-weight: 600; }
+    .kol-email { margin-top: 8px; font-size: 12px; }
+    .kol-email .email-chip { font-size: 11px; padding: 3px 10px; }
     .kol-notes { font-size: 11px; color: #a05c74; margin-top: 6px; font-weight: 600; word-break: break-word; }
-    .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 2px 0; }
+    .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 8px 0; }
 
     /* ---------- 卡片紧凑化：压缩内部垂直间距，让卡片变矮 ---------- */
     /* 容器内元素间距收紧 */
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { gap: 6px; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { gap: 8px; }
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) > .element-container { margin: 0 !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 6px; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 8px; }
     /* 分隔线：Streamlit 会给 markdown 里的 hr 默认 32px 上下外边距（卡片里多出64px空白），
-       必须用卡片作用域 + !important 强制压回 2px */
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) hr.kol-divider { margin: 2px 0 !important; }
+       必须用卡片作用域 + !important 压回；设为 8px 与各行间距一致 */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) hr.kol-divider { margin: 8px 0 !important; }
     /* 卡片内控件统一 40px：图标按钮设 34px 会被 Streamlit 的 min-height:40px 撑成椭圆，
        所以宽高都锁定 40px 保证正圆；下拉框/备注框一并对齐 40px */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stSelectbox"] [role="group"],
