@@ -41,9 +41,9 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* ---------- 全局底色：低饱和粉渐变 · 钉在屏幕上（滚动也铺满） ---------- */
+    /* ---------- 全局底色：饱和泡泡糖粉渐变（参考图2）· 钉在屏幕上 ---------- */
     .stApp {
-        background: linear-gradient(160deg, #fdf1f6 0%, #f7e2ec 100%);
+        background: linear-gradient(160deg, #f8aec1 0%, #f49db3 55%, #f195ab 100%);
         background-attachment: fixed;
     }
     footer { visibility: hidden; }
@@ -60,19 +60,19 @@ st.markdown("""
     .app-hero { text-align: center; padding: 8px 0 4px; position: relative; }
     .app-hero .hero-logo {
         width: 58px; height: 58px; margin: 0 auto 14px; border-radius: 50%;
-        background: rgba(67,48,58,.88); color: #fff; display: flex; align-items: center; justify-content: center;
-        font-size: 24px; box-shadow: 0 8px 20px rgba(67,48,58,.22); backdrop-filter: blur(8px);
+        background: #1c1c1e; color: #fff; display: flex; align-items: center; justify-content: center;
+        font-size: 24px; box-shadow: 0 8px 20px rgba(28,28,30,.28);
     }
-    .app-hero .hero-title { font-size: 32px; font-weight: 800; color: #43303a; margin: 0 0 6px; letter-spacing: -0.02em; }
-    .app-hero .hero-sub { font-size: 14px; color: #9c8794; font-weight: 500; margin: 0; }
-    /* 星星：随机闪烁（每颗延迟/周期不同，看起来像随机眨眼睛） */
+    .app-hero .hero-title { font-size: 32px; font-weight: 800; color: #1c1c1e; margin: 0 0 6px; letter-spacing: -0.02em; }
+    .app-hero .hero-sub { font-size: 14px; color: #8c5468; font-weight: 600; margin: 0; }
+    /* 星星：紫+黄（呼应图2）· 随机闪烁 */
     .app-hero .hero-star { position: absolute; font-size: 20px; animation: twinkle 2.6s ease-in-out infinite; }
-    .app-hero .hero-star-l { left: 22%; top: 14px; color: #a99fc7; animation-delay: 0s; animation-duration: 2.2s; }
-    .app-hero .hero-star-r { right: 22%; top: 14px; color: #f2e3c0; animation-delay: .8s; animation-duration: 3.1s; }
-    .app-hero .hero-star-2 { left: 30%; top: 66px; color: #f2e3c0; font-size: 14px; animation-delay: 1.4s; animation-duration: 2.7s; }
-    .app-hero .hero-star-3 { right: 30%; top: 70px; color: #a99fc7; font-size: 15px; animation-delay: .4s; animation-duration: 3.4s; }
-    .app-hero .hero-star-4 { left: 16%; top: 52px; color: #eec3d4; font-size: 13px; animation-delay: 1.9s; animation-duration: 2.4s; }
-    .app-hero .hero-star-5 { right: 15%; top: 48px; color: #f2e3c0; font-size: 12px; animation-delay: 1.1s; animation-duration: 2.9s; }
+    .app-hero .hero-star-l { left: 22%; top: 14px; color: #8674d6; animation-delay: 0s; animation-duration: 2.2s; }
+    .app-hero .hero-star-r { right: 22%; top: 14px; color: #f5c542; animation-delay: .8s; animation-duration: 3.1s; }
+    .app-hero .hero-star-2 { left: 30%; top: 66px; color: #f5c542; font-size: 14px; animation-delay: 1.4s; animation-duration: 2.7s; }
+    .app-hero .hero-star-3 { right: 30%; top: 70px; color: #8674d6; font-size: 15px; animation-delay: .4s; animation-duration: 3.4s; }
+    .app-hero .hero-star-4 { left: 16%; top: 52px; color: #8674d6; font-size: 13px; animation-delay: 1.9s; animation-duration: 2.4s; }
+    .app-hero .hero-star-5 { right: 15%; top: 48px; color: #f5c542; font-size: 12px; animation-delay: 1.1s; animation-duration: 2.9s; }
     @keyframes twinkle {
         0%, 100% { opacity: .2; transform: scale(.75) rotate(-10deg); }
         50% { opacity: 1; transform: scale(1.2) rotate(10deg); }
@@ -151,43 +151,43 @@ st.markdown("""
     .status-onboard { background: #e9e5f2; color: #8d80b5; }
     .status-reject { background: #f1e9ec; color: #9c8794; }
 
-    /* ---------- 侧边栏 ---------- */
+    /* ---------- 侧边栏：浅粉半透明 ---------- */
     section[data-testid="stSidebar"] {
-        background-color: rgba(255,253,250,.6); border-right: 1px solid #f0d9e3;
+        background-color: rgba(255,235,241,.55); backdrop-filter: blur(14px);
+        border-right: 1px solid rgba(255,255,255,.7);
     }
 
-    /* ---------- 按钮：白色半透明毛玻璃胶囊 · 42px高（!important 覆盖内置样式）
+    /* ---------- 按钮：黑色胶囊（参考图2导航栏黑）· 42px高 ----------
        注意：1.60 里 button 被 tooltip span 包了三层，不是 .stButton 直接子元素，
        必须用后代选择器（空格），用 > 会完全匹配不到！ ---------- */
     .stButton button, .stDownloadButton button {
         border-radius: 999px !important; height: 42px; padding: 0 26px; font-weight: 800;
-        border: 1px solid rgba(255,255,255,.85) !important;
-        background: rgba(255,255,255,.55) !important; backdrop-filter: blur(12px);
-        color: #43303a !important;
-        box-shadow: 0 4px 12px rgba(67,48,58,.08);
+        border: none !important;
+        background: #1c1c1e !important;
+        color: #fff !important;
+        box-shadow: 0 6px 14px rgba(28,28,30,.25);
         transition: all .15s;
         display: inline-flex; align-items: center; justify-content: center;
     }
     .stButton button p, .stDownloadButton button p { margin: 0; color: inherit; }
     .stButton button:hover, .stDownloadButton button:hover {
-        background: rgba(255,255,255,.85) !important; color: #43303a !important; transform: translateY(-1px);
-        box-shadow: 0 7px 16px rgba(67,48,58,.14);
+        background: #33333a !important; color: #fff !important; transform: translateY(-1px);
+        box-shadow: 0 8px 18px rgba(28,28,30,.32);
     }
-    /* ---------- 图标按钮（🔄/🗑/×）：正圆毛玻璃 42×42（1.60 用 stBaseButton-primary；
-       特异性 (0,2,1) 高于上面的普通按钮规则，圆形不会被胶囊覆盖） ---------- */
+    /* ---------- 图标按钮（🔄/🗑/×）：白底黑字正圆 42×42 ---------- */
     .stButton button[data-testid="stBaseButton-primary"] {
         width: 42px !important; height: 42px !important; padding: 0 !important;
         border-radius: 50% !important;
-        background: rgba(255,255,255,.7) !important; backdrop-filter: blur(8px);
-        color: #9c8794 !important; border: 1px solid #f0d9e3 !important;
-        box-shadow: none;
+        background: #fff !important;
+        color: #1c1c1e !important; border: none !important;
+        box-shadow: 0 5px 12px rgba(150,60,95,.18);
     }
     .stButton button[data-testid="stBaseButton-primary"]:hover {
-        background: #f9e8ef !important; color: #b06a8c !important; border-color: #eec3d4 !important;
-        transform: none; box-shadow: 0 4px 10px rgba(67,48,58,.10);
+        background: #fdeef3 !important; color: #1c1c1e !important;
+        transform: none; box-shadow: 0 6px 14px rgba(150,60,95,.24);
     }
 
-    /* ---------- Tabs：4个均分毛玻璃按钮 · 选中=深梅玻璃（Streamlit 1.60 React Aria 结构） ---------- */
+    /* ---------- Tabs：4个均分胶囊 · 白色=未选中 · 黑色=选中（参考图2导航栏） ---------- */
     .stTabs [role="tablist"] {
         gap: 10px; border-bottom: none;
         background: transparent; padding: 0;
@@ -196,20 +196,20 @@ st.markdown("""
     .stTabs [role="tab"] {
         flex: 1;
         border-radius: 999px !important; padding: 11px 0 !important; font-weight: 800;
-        background: rgba(255,255,255,.55) !important; backdrop-filter: blur(12px);
-        color: #9c8794 !important; border: 1px solid rgba(255,255,255,.85) !important;
+        background: rgba(255,255,255,.85) !important;
+        color: #8c5468 !important; border: none !important;
         justify-content: center;
-        box-shadow: 0 4px 12px rgba(67,48,58,.06);
+        box-shadow: 0 4px 12px rgba(150,60,95,.10);
         transition: all .18s;
     }
-    .stTabs [role="tab"]:hover { background: rgba(255,255,255,.85) !important; color: #43303a !important; }
+    .stTabs [role="tab"]:hover { background: #fff !important; color: #2b2028 !important; }
     .stTabs [role="tab"][aria-selected="true"] {
-        background: rgba(67,48,58,.88) !important; backdrop-filter: blur(12px);
+        background: #1c1c1e !important;
         color: #ffffff !important; border-color: transparent !important;
-        box-shadow: 0 6px 16px rgba(67,48,58,.25);
+        box-shadow: 0 8px 18px rgba(28,28,30,.30);
     }
     .stTabs [role="tab"] p { color: inherit; }
-    /* 隐藏默认红色下划线指示器（1.60 新结构） */
+    /* 隐藏默认下划线指示器（1.60 新结构） */
     .stTabs .react-aria-SelectionIndicator { display: none !important; }
 
     /* ---------- 指标卡：毛玻璃 ---------- */
@@ -463,6 +463,20 @@ with st.sidebar:
     if api_key_input != st.session_state.api_key:
         st.session_state.api_key = api_key_input
         st.session_state.quota = QuotaTracker()
+
+    # ---------- 如何获取 API Key：点击展开看步骤 ----------
+    with st.expander("📖 如何获取 API Key？（点我看步骤）"):
+        st.markdown("""
+**1.** 打开 **console.cloud.google.com**，用 Google 账号登录
+
+**2.** 顶部选择或新建一个项目（例如叫 KOL-Finder）
+
+**3.** 左侧菜单「API 和服务」→「库」，搜索 **YouTube Data API v3**，点「启用」
+
+**4.** 左侧「凭据」→「+ 创建凭据」→「**API 密钥**」
+
+**5.** 复制密钥粘贴到上面输入框即可（免费 10,000 units/天，够全队用）
+""")
 
     # ---------- 公共库：已写死在代码里，只显示状态 ----------
     st.markdown("")
@@ -818,7 +832,7 @@ with tab_database:
         with col_f1:
             filter_status = st.selectbox("状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"])
         with col_f2:
-            filter_cat = st.multiselect("垂类", options=list(KW_LIB.keys()), default=[])
+            filter_cat = st.multiselect("垂类", options=list(KW_LIB.keys()), default=[], placeholder="全部垂类")
         with col_f3:
             # 挖掘人筛选：全部 / 只看我的 / 各个挖过博主的同事名字（自动从记录收集）
             discoverers = sorted({r.get("discovered_by", "") for r in records if r.get("discovered_by")})
