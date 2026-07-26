@@ -168,18 +168,29 @@ st.markdown("""
         background: #fffdf7;
         border: 3px solid #1c1c1e; border-radius: 18px;
         box-shadow: 6px 6px 0 #1c1c1e;
-        padding: 16px;
+        padding: 10px;
     }
     /* 卡片内部紧凑排版（卡片变窄，内容要小） */
     .kol-name { font-size: 15px; font-weight: 800; color: #1c1c1e; line-height: 1.3; word-break: break-word; }
     .kol-home { font-size: 12px; font-weight: 800; color: #8674d6; text-decoration: none; white-space: nowrap; }
-    .kol-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-    .kol-stats { font-size: 12px; color: #1c1c1e; margin-top: 10px; font-weight: 700; }
-    .kol-sub { font-size: 11px; color: #a05c74; margin-top: 4px; font-weight: 600; }
-    .kol-email { margin-top: 8px; font-size: 12px; }
-    .kol-email .email-chip { font-size: 11px; padding: 3px 10px; }
+    .kol-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    .kol-stats { font-size: 12px; color: #1c1c1e; margin-top: 6px; font-weight: 700; }
+    .kol-sub { font-size: 11px; color: #a05c74; margin-top: 2px; font-weight: 600; }
+    .kol-email { margin-top: 4px; font-size: 12px; }
+    .kol-email .email-chip { font-size: 11px; padding: 2px 9px; }
     .kol-notes { font-size: 11px; color: #a05c74; margin-top: 6px; font-weight: 600; word-break: break-word; }
-    .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 4px 0; }
+    .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 2px 0; }
+
+    /* ---------- 卡片紧凑化：压缩内部垂直间距，让卡片变矮 ---------- */
+    /* 容器内元素间距收紧 */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { gap: 6px; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) > .element-container { margin: 0 !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 6px; }
+    /* 卡片内控件统一缩到 34px（比全局 44px 矮一截） */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stSelectbox"] [role="group"],
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) div[data-baseweb="select"] > div { min-height: 34px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stTextInput input { height: 34px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 34px !important; height: 34px !important; }
 
     /* ---------- 侧边栏：纯浅粉 + 粗黑右边框（无毛玻璃） ---------- */
     section[data-testid="stSidebar"] {
