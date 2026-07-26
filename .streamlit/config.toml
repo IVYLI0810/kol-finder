@@ -1,8 +1,8 @@
 # KOL Finder 主题配置（Streamlit 官方主题机制，跨版本稳定）
-# 粉色背景 + 粉紫点缀（参考图2配色）
+# 卡通像素风：纯色粉底 + 紫色点缀（与 app.py CSS 保持一致）
 [theme]
 primaryColor = "#8674d6"
-backgroundColor = "#f49db3"
-secondaryBackgroundColor = "#fbc7d5"
-textColor = "#2b2028"
+backgroundColor = "#f5a3b8"
+secondaryBackgroundColor = "#ffd9e3"
+textColor = "#1c1c1e"
 font = "sans serif"
