@@ -1,0 +1,8 @@
+# KOL Finder 主题配置（Streamlit 官方主题机制，跨版本稳定）
+# 作用：把 Streamlit 默认的红色系（滑杆、选中态、主按钮）换成低饱和雾灰紫
+[theme]
+primaryColor = "#a99fc7"
+backgroundColor = "#fdf1f6"
+secondaryBackgroundColor = "#f7e2ec"
+textColor = "#43303a"
+font = "sans serif"
