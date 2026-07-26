@@ -156,55 +156,61 @@ st.markdown("""
         background-color: rgba(255,253,250,.6); border-right: 1px solid #f0d9e3;
     }
 
-    /* ---------- 按钮：白色半透明毛玻璃胶囊 · 42px高 ---------- */
-    .stButton > button, .stDownloadButton > button {
-        border-radius: 999px; height: 42px; padding: 0 26px; font-weight: 800;
-        border: 1px solid rgba(255,255,255,.85);
-        background: rgba(255,255,255,.55); backdrop-filter: blur(12px);
-        color: #43303a;
+    /* ---------- 按钮：白色半透明毛玻璃胶囊 · 42px高（!important 覆盖内置样式）
+       注意：1.60 里 button 被 tooltip span 包了三层，不是 .stButton 直接子元素，
+       必须用后代选择器（空格），用 > 会完全匹配不到！ ---------- */
+    .stButton button, .stDownloadButton button {
+        border-radius: 999px !important; height: 42px; padding: 0 26px; font-weight: 800;
+        border: 1px solid rgba(255,255,255,.85) !important;
+        background: rgba(255,255,255,.55) !important; backdrop-filter: blur(12px);
+        color: #43303a !important;
         box-shadow: 0 4px 12px rgba(67,48,58,.08);
         transition: all .15s;
         display: inline-flex; align-items: center; justify-content: center;
     }
-    .stButton > button p, .stDownloadButton > button p { margin: 0; color: inherit; }
-    .stButton > button:hover, .stDownloadButton > button:hover {
-        background: rgba(255,255,255,.85); color: #43303a; transform: translateY(-1px);
+    .stButton button p, .stDownloadButton button p { margin: 0; color: inherit; }
+    .stButton button:hover, .stDownloadButton button:hover {
+        background: rgba(255,255,255,.85) !important; color: #43303a !important; transform: translateY(-1px);
         box-shadow: 0 7px 16px rgba(67,48,58,.14);
     }
-    /* ---------- 图标按钮（🔄/🗑）：正圆毛玻璃 42×42 ---------- */
-    .stButton > button[kind="primary"],
-    .stButton > button[data-testid="baseButton-primary"] {
-        width: 42px; height: 42px; padding: 0; border-radius: 50%;
-        background: rgba(255,255,255,.7); backdrop-filter: blur(8px);
-        color: #9c8794; border: 1px solid #f0d9e3;
+    /* ---------- 图标按钮（🔄/🗑/×）：正圆毛玻璃 42×42（1.60 用 stBaseButton-primary；
+       特异性 (0,2,1) 高于上面的普通按钮规则，圆形不会被胶囊覆盖） ---------- */
+    .stButton button[data-testid="stBaseButton-primary"] {
+        width: 42px !important; height: 42px !important; padding: 0 !important;
+        border-radius: 50% !important;
+        background: rgba(255,255,255,.7) !important; backdrop-filter: blur(8px);
+        color: #9c8794 !important; border: 1px solid #f0d9e3 !important;
         box-shadow: none;
     }
-    .stButton > button[kind="primary"]:hover,
-    .stButton > button[data-testid="baseButton-primary"]:hover {
-        background: #f9e8ef; color: #b06a8c; border-color: #eec3d4;
+    .stButton button[data-testid="stBaseButton-primary"]:hover {
+        background: #f9e8ef !important; color: #b06a8c !important; border-color: #eec3d4 !important;
         transform: none; box-shadow: 0 4px 10px rgba(67,48,58,.10);
     }
 
-    /* ---------- Tabs：4个均分毛玻璃按钮 · 选中=深梅玻璃 ---------- */
-    .stTabs [data-baseweb="tab-list"] {
+    /* ---------- Tabs：4个均分毛玻璃按钮 · 选中=深梅玻璃（Streamlit 1.60 React Aria 结构） ---------- */
+    .stTabs [role="tablist"] {
         gap: 10px; border-bottom: none;
         background: transparent; padding: 0;
+        display: flex;
     }
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 999px; padding: 11px 0; font-weight: 800;
-        background: rgba(255,255,255,.55); backdrop-filter: blur(12px);
-        color: #9c8794; border: 1px solid rgba(255,255,255,.85);
-        flex: 1; justify-content: center;
+    .stTabs [role="tab"] {
+        flex: 1;
+        border-radius: 999px !important; padding: 11px 0 !important; font-weight: 800;
+        background: rgba(255,255,255,.55) !important; backdrop-filter: blur(12px);
+        color: #9c8794 !important; border: 1px solid rgba(255,255,255,.85) !important;
+        justify-content: center;
         box-shadow: 0 4px 12px rgba(67,48,58,.06);
+        transition: all .18s;
     }
-    .stTabs [data-baseweb="tab"]:hover { background: rgba(255,255,255,.85); color: #43303a; }
-    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+    .stTabs [role="tab"]:hover { background: rgba(255,255,255,.85) !important; color: #43303a !important; }
+    .stTabs [role="tab"][aria-selected="true"] {
         background: rgba(67,48,58,.88) !important; backdrop-filter: blur(12px);
         color: #ffffff !important; border-color: transparent !important;
         box-shadow: 0 6px 16px rgba(67,48,58,.25);
     }
-    .stTabs [data-baseweb="tab"] p { color: inherit; }
-    .stTabs [data-baseweb="tab-highlight"] { display: none; background-color: transparent; }
+    .stTabs [role="tab"] p { color: inherit; }
+    /* 隐藏默认红色下划线指示器（1.60 新结构） */
+    .stTabs .react-aria-SelectionIndicator { display: none !important; }
 
     /* ---------- 指标卡：毛玻璃 ---------- */
     div[data-testid="stMetric"] {
@@ -227,40 +233,33 @@ st.markdown("""
     .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
         border-color: #a99fc7; box-shadow: 0 0 0 3px rgba(169,159,199,.22);
     }
-    /* 数字框：隐藏 −/+ 按钮，变干净纯胶囊 */
-    .stNumberInput button[title="step up"], .stNumberInput button[title="step down"],
-    .stNumberInput [data-testid="stNumberInput"] button,
-    .stNumberInput button[kind="header"], .stNumberInput button[kind="footer"] {
+    /* 数字框：隐藏 −/+ 按钮（1.60 改名为 stNumberInputStepUp/Down），变干净纯胶囊 */
+    [data-testid="stNumberInputStepUp"], [data-testid="stNumberInputStepDown"] {
         display: none !important;
     }
     .stNumberInput input { padding-right: 20px !important; }
-    /* ---------- 下拉框/多选框：胶囊 ---------- */
+    /* ---------- 下拉框/多选框：胶囊（1.60 React Aria ComboBox 结构） ---------- */
+    [data-testid="stSelectbox"] [role="group"],
+    [data-testid="stMultiSelect"] [role="group"],
     div[data-baseweb="select"] > div {
         border-radius: 999px !important; min-height: 42px;
         border: 1.5px solid #f0d9e3 !important; background: rgba(255,255,255,.85) !important;
     }
     div[data-baseweb="popover"] > ul { border-radius: 16px; }
 
-    /* ---------- 滑杆：雾灰紫轨道 + 深梅圆钮 ---------- */
-    .stSlider [data-baseweb="slider"] > div > div { border-radius: 999px; }
-    .stSlider [data-baseweb="slider"] > div > div:nth-child(2) {
-        background: linear-gradient(90deg, #a99fc7, #c4bcdc) !important;
-    }
-    .stSlider [data-baseweb="slider"] div[tabindex="0"] {
-        background-color: #43303a !important; border: 3px solid #fff !important;
-        border-radius: 50% !important; box-shadow: 0 3px 8px rgba(67,48,58,.3) !important;
-    }
+    /* ---------- 滑杆：颜色由 .streamlit/config.toml 的 primaryColor 统一控制（雾灰紫），
+       旧的 data-baseweb="slider" 选择器在 1.60 已失效，无需再写 ---------- */
 
     /* ---------- 提示条 / 展开器 / 代码块：统一圆角 ---------- */
     div[data-testid="stAlert"], .stAlert { border-radius: 16px !important; }
-    details[data-testid="stExpander"] {
+    /* 1.60: stExpander 的 testid 从 <details> 挪到外层 <div>，选择器不限定标签 */
+    [data-testid="stExpander"] {
         border-radius: 18px !important; border: 1.5px solid #f0d9e3 !important;
         background: rgba(255,255,255,.5) !important;
     }
-    /* 展开器里的删除小圆按钮（词库×）：缩到28px，不占地方 */
-    details[data-testid="stExpander"] .stButton > button[kind="primary"],
-    details[data-testid="stExpander"] .stButton > button[data-testid="baseButton-primary"] {
-        width: 28px; height: 28px; font-size: 13px;
+    /* 展开器里的删除小圆按钮（词库×）：缩到28px，不占地方（1.60: 后代选择器） */
+    [data-testid="stExpander"] .stButton button[data-testid="stBaseButton-primary"] {
+        width: 28px !important; height: 28px !important; font-size: 13px;
     }
     pre { border-radius: 14px !important; }
 
@@ -449,8 +448,8 @@ with st.sidebar:
             st.session_state.user_name = chosen
             st.query_params["u"] = chosen
 
-    if st.session_state.user_name:
-        st.success(f"🌸 你好，{st.session_state.user_name}！刷新不会丢")
+    if st.session_state.user_name and chosen == st.session_state.user_name:
+        pass  # 名字已生效（下拉框会显示选中状态），不再额外弹问候框，保持侧边栏干净
 
     # ---------- YouTube API Key：每次自己填，不存数据库 ----------
     st.markdown("")
@@ -477,19 +476,11 @@ with st.sidebar:
     else:
         st.error("❌ 连接失败，请联系管理员")
 
-    # ---------- 配额 ----------
-    st.markdown("")
-    st.markdown("#### 📊 今日配额")
+    # ---------- 配额（精简成一行小字，去掉标题和进度条） ----------
     quota = st.session_state.quota
-    st.progress(
-        min(quota.used / QuotaTracker.DAILY_LIMIT, 1.0),
-        text=f"已用 {quota.used:,} / {QuotaTracker.DAILY_LIMIT:,} units"
-    )
+    st.caption(f"📊 今日已用 {quota.used:,} / {QuotaTracker.DAILY_LIMIT:,} units")
     if quota.remaining < 500:
         st.warning("⚠️ 配额即将用完")
-
-    st.markdown("")
-    st.caption("KOL Finder v3.0 · 低饱和毛玻璃")
 
 
 # ============================================================
