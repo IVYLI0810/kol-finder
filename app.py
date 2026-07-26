@@ -160,6 +160,27 @@ st.markdown("""
     .status-onboard { background: #7fd8a4; color: #1c1c1e; }
     .status-reject { background: #ffd9e3; color: #1c1c1e; }
 
+    /* ---------- 网红库三列小卡片：把 Streamlit 容器变成卡片 ----------
+       原理：卡片容器内第一个元素是隐藏的 .kol-card-marker，
+       用 :has() 选中"直接子级含该标记"的容器（不会误伤外层列）。 */
+    .kol-card-marker { display: none; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) {
+        background: #fffdf7;
+        border: 3px solid #1c1c1e; border-radius: 18px;
+        box-shadow: 6px 6px 0 #1c1c1e;
+        padding: 16px;
+    }
+    /* 卡片内部紧凑排版（卡片变窄，内容要小） */
+    .kol-name { font-size: 15px; font-weight: 800; color: #1c1c1e; line-height: 1.3; word-break: break-word; }
+    .kol-home { font-size: 12px; font-weight: 800; color: #8674d6; text-decoration: none; white-space: nowrap; }
+    .kol-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .kol-stats { font-size: 12px; color: #1c1c1e; margin-top: 10px; font-weight: 700; }
+    .kol-sub { font-size: 11px; color: #a05c74; margin-top: 4px; font-weight: 600; }
+    .kol-email { margin-top: 8px; font-size: 12px; }
+    .kol-email .email-chip { font-size: 11px; padding: 3px 10px; }
+    .kol-notes { font-size: 11px; color: #a05c74; margin-top: 6px; font-weight: 600; word-break: break-word; }
+    .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 4px 0; }
+
     /* ---------- 侧边栏：纯浅粉 + 粗黑右边框（无毛玻璃） ---------- */
     section[data-testid="stSidebar"] {
         background-color: #ffd9e3;
@@ -347,6 +368,20 @@ def _safe(text) -> str:
     text = text.replace("|", "｜")        # 竖线换成全角，避免被当成表格
     text = text.replace("\n", " ")        # 换行换成空格
     return text
+
+
+def _render_html(html_str: str):
+    """
+    安全渲染自定义HTML，防止被Markdown误判成代码块（卡片变一堆代码）。
+    两个坑：
+    ① 纯空白行会被Markdown当成"空行"——HTML块遇到空行就终止，其后内容
+       全部变成原始代码显示。当频道没有商业化历史时 comm_html 为空，它所在
+       的行就成了纯空白行，正是"卡片变代码"反复复发的根因。
+    ② 层级缩进（行首多个空格）可能被Markdown当成缩进代码块。
+    统一处理：删掉纯空白行 + 去掉每行行首缩进（空白对HTML渲染无意义）。
+    """
+    lines = [line.strip() for line in html_str.split("\n") if line.strip()]
+    st.markdown("\n".join(lines), unsafe_allow_html=True)
 
 
 # ============================================================
@@ -716,7 +751,7 @@ with tab_search:
                 # 代表视频标题（清理特殊符号，防止破坏排版）
                 titles_clean = " / ".join(_safe(t) for t in ch.get("recent_titles", [])[:3])
 
-                st.markdown(f"""
+                _render_html(f"""
                 <div class="channel-card">
                     <div class="card-head">
                         <div style="display:flex; align-items:flex-start;">
@@ -752,7 +787,7 @@ with tab_search:
                     </div>
                     {thumb_html}
                 </div>
-                """, unsafe_allow_html=True)
+                """)
 
                 # 操作按钮
                 col_a1, col_a2, col_a3 = st.columns([1, 1, 3])
@@ -893,110 +928,114 @@ with tab_database:
         st.markdown(f"显示 {len(filtered_db)} / {len(records)} 条")
         st.markdown("")
 
-        # 列表
-        for idx, rec in enumerate(filtered_db):
-            status = rec.get("status", "新发现")
-            status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
-                           "已引入": "status-onboard", "已拒绝": "status-reject",
-                           "已淘汰": "status-reject"}.get(status, "status-new")
+        # 列表（三列小卡片，打标按键全部收进卡片内）
+        num_cols = 3
+        total_db = len(filtered_db)
+        for row_start in range(0, total_db, num_cols):
+            cols = st.columns(num_cols)
+            for j in range(num_cols):
+                idx = row_start + j
+                if idx >= total_db:
+                    break
+                rec = filtered_db[idx]
+                with cols[j]:
+                    with st.container():
+                        # 隐藏标记：让外层容器变成卡片（见CSS :has()规则）
+                        st.markdown('<div class="kol-card-marker"></div>', unsafe_allow_html=True)
 
-            name = rec.get("channel_name", "未知")
-            url = rec.get("channel_url", "#")
-            subs = rec.get("subscribers", 0)
-            score = rec.get("score_total", "-")
-            cat = rec.get("category", "")
-            discoverer = rec.get("discovered_by", "")
-            email = rec.get("emails", "")
-            notes = rec.get("notes", "")
+                        status = rec.get("status", "新发现")
+                        status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
+                                       "已引入": "status-onboard", "已拒绝": "status-reject",
+                                       "已淘汰": "status-reject"}.get(status, "status-new")
 
-            st.markdown(f"""
-            <div class="channel-card">
-                <div class="card-head" style="margin-bottom:0;">
-                    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:8px;">
-                        <span class="card-name">{_safe(name)}</span>
-                        <span class="status-tag {status_class}">{status}</span>
-                        <span class="cat-tag">📂 {_safe(cat)}</span>
-                    </div>
-                    <div class="card-links">
-                        <a class="link-home" href="{url}" target="_blank">主页 ↗</a>
-                    </div>
-                </div>
-                <div style="font-size:12px; color:#96707f; margin-top:10px;">
-                    📺 {subs:,} 订阅 · ⭐ 评分 {score}
-                    {' · 👤 挖掘人：' + _safe(discoverer) if discoverer else ''}
-                </div>
-                {'<div style="margin-top:8px; font-size:12px;">📧 <span class="email-chip">' + _safe(email) + '</span></div>' if email else ''}
-                {'<div style="margin-top:8px; font-size:12px; color:#96707f;">📝 ' + _safe(notes) + '</div>' if notes else ''}
-            </div>
-            """, unsafe_allow_html=True)
+                        name = rec.get("channel_name", "未知")
+                        url = rec.get("channel_url", "#")
+                        subs = rec.get("subscribers", 0)
+                        score = rec.get("score_total", "-")
+                        cat = rec.get("category", "")
+                        discoverer = rec.get("discovered_by", "")
+                        email = rec.get("emails", "")
+                        notes = rec.get("notes", "")
 
-            # 操作
-            col_s1, col_s2, col_s3, col_s4 = st.columns([1.8, 0.6, 0.6, 5])
-            with col_s1:
-                new_status = st.selectbox(
-                    "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
-                    index=["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"].index(status),
-                    key=f"st_{idx}", label_visibility="collapsed",
-                )
-                if new_status != status:
-                    db = get_db()
-                    cid = rec.get("channel_id", "")
-                    if db:
-                        db.update_status(cid, new_status)
-                    else:
-                        # 本地模式
-                        for lr in st.session_state.local_db:
-                            if lr.get("channel_id") == cid:
-                                lr["status"] = new_status
-                                lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.rerun()
-            with col_s2:
-                if st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary"):
-                    if st.session_state.api_key:
-                        with st.spinner("复查中..."):
-                            ch_copy = dict(rec)
-                            ch_copy["uploads_playlist_id"] = ""  # 需要重新获取
-                            # 简化复查：通过频道ID重新获取信息
-                            chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
-                            if chs:
-                                ch_info = list(chs.values())[0]
-                                result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
+                        # 卡片信息（紧凑版）
+                        _render_html(f"""
+                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                            <span class="kol-name">{_safe(name)}</span>
+                            <a class="kol-home" href="{url}" target="_blank">主页 ↗</a>
+                        </div>
+                        <div class="kol-tags">
+                            <span class="status-tag {status_class}">{status}</span>
+                            <span class="cat-tag">📂 {_safe(cat)}</span>
+                        </div>
+                        <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
+                        {'<div class="kol-sub">👤 挖掘人：' + _safe(discoverer) + '</div>' if discoverer else ''}
+                        {'<div class="kol-email">📧 <span class="email-chip">' + _safe(email) + '</span></div>' if email else ''}
+                        <hr class="kol-divider">
+                        """)
+
+                        # 状态下拉
+                        new_status = st.selectbox(
+                            "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
+                            index=["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"].index(status),
+                            key=f"st_{idx}", label_visibility="collapsed",
+                        )
+                        if new_status != status:
+                            db = get_db()
+                            cid = rec.get("channel_id", "")
+                            if db:
+                                db.update_status(cid, new_status)
+                            else:
+                                for lr in st.session_state.local_db:
+                                    if lr.get("channel_id") == cid:
+                                        lr["status"] = new_status
+                                        lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            st.rerun()
+
+                        # 复查 / 删除 / 备注
+                        c_rc, c_rm, c_nt = st.columns([1, 1, 4])
+                        with c_rc:
+                            if st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary"):
+                                if st.session_state.api_key:
+                                    with st.spinner("复查中..."):
+                                        chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
+                                        if chs:
+                                            ch_info = list(chs.values())[0]
+                                            result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
+                                            db = get_db()
+                                            cid = rec.get("channel_id", "")
+                                            if result:
+                                                result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
+                                                if db:
+                                                    db.update_last_checked(cid, True, result)
+                                                st.success(f"✅ {name} 仍然活跃")
+                                            else:
+                                                if db:
+                                                    db.update_last_checked(cid, False)
+                                                st.warning(f"⚠️ {name} 已不活跃")
+                                else:
+                                    st.error("需要API Key")
+                        with c_rm:
+                            if st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary"):
                                 db = get_db()
                                 cid = rec.get("channel_id", "")
-                                if result:
-                                    result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
-                                    if db:
-                                        db.update_last_checked(cid, True, result)
-                                    st.success(f"✅ {name} 仍然活跃")
+                                if db:
+                                    db.remove(cid)
                                 else:
-                                    if db:
-                                        db.update_last_checked(cid, False)
-                                    st.warning(f"⚠️ {name} 已不活跃")
-                    else:
-                        st.error("需要API Key")
-            with col_s3:
-                if st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary"):
-                    db = get_db()
-                    cid = rec.get("channel_id", "")
-                    if db:
-                        db.remove(cid)
-                    else:
-                        st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                    st.rerun()
-            with col_s4:
-                note_val = st.text_input("备注", value=notes, key=f"nt_{idx}",
-                                         placeholder="例：已发邮件、回复快、要价高...",
-                                         label_visibility="collapsed")
-                if note_val != notes:
-                    db = get_db()
-                    cid = rec.get("channel_id", "")
-                    if db:
-                        db.update_notes(cid, note_val)
-                    else:
-                        for lr in st.session_state.local_db:
-                            if lr.get("channel_id") == cid:
-                                lr["notes"] = note_val
-            st.markdown("")
+                                    st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                                st.rerun()
+                        with c_nt:
+                            note_val = st.text_input("备注", value=notes, key=f"nt_{idx}",
+                                                     placeholder="例：已发邮件、回复快、要价高...",
+                                                     label_visibility="collapsed")
+                            if note_val != notes:
+                                db = get_db()
+                                cid = rec.get("channel_id", "")
+                                if db:
+                                    db.update_notes(cid, note_val)
+                                else:
+                                    for lr in st.session_state.local_db:
+                                        if lr.get("channel_id") == cid:
+                                            lr["notes"] = note_val
 
         # 导出
         st.markdown("---")
