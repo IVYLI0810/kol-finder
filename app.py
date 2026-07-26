@@ -186,11 +186,15 @@ st.markdown("""
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { gap: 6px; }
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) > .element-container { margin: 0 !important; }
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 6px; }
-    /* 卡片内控件统一缩到 34px（比全局 44px 矮一截） */
+    /* 分隔线：Streamlit 会给 markdown 里的 hr 默认 32px 上下外边距（卡片里多出64px空白），
+       必须用卡片作用域 + !important 强制压回 2px */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) hr.kol-divider { margin: 2px 0 !important; }
+    /* 卡片内控件统一 40px：图标按钮设 34px 会被 Streamlit 的 min-height:40px 撑成椭圆，
+       所以宽高都锁定 40px 保证正圆；下拉框/备注框一并对齐 40px */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stSelectbox"] [role="group"],
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) div[data-baseweb="select"] > div { min-height: 34px !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stTextInput input { height: 34px !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 34px !important; height: 34px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) div[data-baseweb="select"] > div { min-height: 40px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stTextInput input { height: 40px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 40px !important; height: 40px !important; min-height: 40px !important; }
 
     /* ---------- 侧边栏：纯浅粉 + 粗黑右边框（无毛玻璃） ---------- */
     section[data-testid="stSidebar"] {
