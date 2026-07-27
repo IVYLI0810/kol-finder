@@ -4,6 +4,7 @@ Supabase 数据库模块
 """
 
 from datetime import datetime
+import json
 from supabase import create_client, Client
 
 
@@ -13,6 +14,7 @@ class InfluencerDB:
     TABLE_NAME = "influencers"
     MEMBERS_TABLE = "members"  # 团队成员名单（只存名字，方便下拉选择）
     KEYWORDS_TABLE = "keywords"  # 团队自定义关键词库（可增删，全队共享）
+    SETTINGS_TABLE = "user_settings"  # 个人筛选设置（每人一行，互不干扰）
 
     def __init__(self, url: str, key: str):
         """
@@ -383,3 +385,57 @@ class InfluencerDB:
             if status in stats:
                 stats[status] += 1
         return stats
+
+    # ============================================================
+    # 个人筛选设置（每人一行，互不干扰）
+    # ============================================================
+
+    def get_user_settings(self, member_name: str) -> dict | None:
+        """
+        读取某成员的个人筛选设置。
+        返回 dict（她的自定义配置）或 None（从未保存过，应使用默认值）。
+        """
+        if not member_name:
+            return None
+        try:
+            result = (
+                self.client.table(self.SETTINGS_TABLE)
+                .select("config_json")
+                .eq("member_name", member_name)
+                .execute()
+            )
+            rows = result.data or []
+            if not rows:
+                return None
+            raw = rows[0].get("config_json", "{}")
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    def save_user_settings(self, member_name: str, config: dict) -> bool:
+        """
+        保存某成员的个人筛选设置（有则更新，无则新增）。
+        """
+        if not member_name:
+            return False
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        payload = {
+            "config_json": json.dumps(config, ensure_ascii=False),
+            "updated_at": now,
+        }
+        try:
+            # 先尝试更新
+            result = (
+                self.client.table(self.SETTINGS_TABLE)
+                .update(payload)
+                .eq("member_name", member_name)
+                .execute()
+            )
+            if result.data:
+                return True
+            # 没有已有记录 → 新增
+            payload["member_name"] = member_name
+            self.client.table(self.SETTINGS_TABLE).insert(payload).execute()
+            return True
+        except Exception:
+            return False

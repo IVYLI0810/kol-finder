@@ -593,6 +593,25 @@ with st.sidebar:
         st.warning("⚠️ 配额即将用完")
 
 
+# ---------- 加载个人筛选设置（切换名字时从数据库读取，互不干扰） ----------
+if st.session_state.user_name:
+    _loaded_for = st.session_state.get("_settings_loaded_for", "")
+    if _loaded_for != st.session_state.user_name:
+        _db_settings = get_db()
+        if _db_settings:
+            _personal = _db_settings.get_user_settings(st.session_state.user_name)
+            if _personal:
+                # 用个人设置覆盖默认值（支持部分字段，缺的用默认）
+                _merged = DEFAULT_CONFIG.copy()
+                _merged.update({k: v for k, v in _personal.items() if k in _merged})
+                if "weights" in _personal:
+                    _merged["weights"] = {**DEFAULT_CONFIG["weights"], **_personal["weights"]}
+                if "dedup_rules" in _personal:
+                    _merged["dedup_rules"] = {**DEFAULT_CONFIG["dedup_rules"], **_personal["dedup_rules"]}
+                st.session_state.config = _merged
+        st.session_state._settings_loaded_for = st.session_state.user_name
+
+
 # ============================================================
 # 主区域
 # ============================================================
@@ -1177,7 +1196,10 @@ UCxxxxxxxxxxxx""", language=None)
 
 with tab_settings:
     st.markdown("### 筛选设置")
-    st.markdown("所有参数可随时调整，适应不同挖掘需求。")
+    if st.session_state.user_name:
+        st.caption(f"当前编辑的是「{st.session_state.user_name}」的个人标准，不影响其他成员")
+    else:
+        st.caption("⚠️ 请先在左侧选好名字，设置才能保存到你个人")
     st.markdown("")
 
     config = st.session_state.config
@@ -1230,7 +1252,7 @@ with tab_settings:
 
     # 保存按钮
     st.markdown("")
-    if st.button("💾 保存设置", use_container_width=True):
+    if st.button("💾 保存我的设置", use_container_width=True):
         st.session_state.config = {
             "min_subs": new_min,
             "max_subs": new_max,
@@ -1245,7 +1267,18 @@ with tab_settings:
                 "emailed_days": d_email, "discovered_days": d_discover,
             },
         }
-        st.success("✅ 设置已保存")
+        # 持久化到数据库（下次打开还是你的设置）
+        _db_save = get_db()
+        if _db_save and st.session_state.user_name:
+            ok = _db_save.save_user_settings(st.session_state.user_name, st.session_state.config)
+            if ok:
+                st.success(f"✅ 设置已保存到「{st.session_state.user_name}」的个人档案，下次打开自动加载")
+            else:
+                st.warning("⚠️ 本次生效，但未能存入数据库（刷新后会恢复默认）")
+        elif not st.session_state.user_name:
+            st.warning("⚠️ 请先在左侧选好你的名字，才能保存个人设置")
+        else:
+            st.success("✅ 设置已保存（本地模式，刷新后恢复默认）")
 
     # 关键词库（可增删 · 全队共享）
     st.markdown("")
