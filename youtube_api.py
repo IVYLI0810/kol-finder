@@ -208,6 +208,53 @@ def get_channels(channel_ids: list[str], api_key: str, quota: QuotaTracker) -> d
     return results
 
 
+def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -> tuple[list[str], int]:
+    """
+    把混合输入统一解析成有效的 UC 频道ID。
+    支持：UC频道ID / /channel/UC... 链接 / @handle（裸写或 youtube.com/@xxx 链接）。
+    @handle 通过官方 forHandle 接口反查频道ID，消耗 1 unit/个。
+    返回：(去重后的有效频道ID列表, 无法解析的行数)
+    """
+    valid = []
+    failed = 0
+    for raw in raw_ids:
+        rid = str(raw).strip()
+        if not rid:
+            continue
+        # 1) 直接就是频道ID
+        if rid.startswith("UC") and len(rid) == 24:
+            valid.append(rid)
+            continue
+        # 2) /channel/UC... 链接里提取
+        m = re.search(r'/channel/(UC[\w-]+)', rid)
+        if m:
+            valid.append(m.group(1))
+            continue
+        # 3) @handle（裸写，或链接里的 youtube.com/@xxx）
+        m = re.search(r'@([\w.\-]+)', rid)
+        if m:
+            handle = m.group(1)
+            params = {"part": "id", "forHandle": "@" + handle}
+            data = _get(f"{BASE_URL}/channels", params, api_key, quota, 1, f"解析@{handle}")
+            items = data.get("items", []) if data else []
+            if items:
+                valid.append(items[0]["id"])
+            else:
+                failed += 1
+            continue
+        # 4) 其他格式（视频链接等）无法识别
+        failed += 1
+
+    # 去重（保持顺序）
+    seen = set()
+    ordered = []
+    for v in valid:
+        if v not in seen:
+            seen.add(v)
+            ordered.append(v)
+    return ordered, failed
+
+
 # ============================================================
 # 活跃度检测 + 数据采集
 # ============================================================

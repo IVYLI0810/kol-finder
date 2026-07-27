@@ -13,7 +13,7 @@ from io import BytesIO
 
 from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
-    score_channel, search_videos, should_exclude,
+    score_channel, search_videos, should_exclude, resolve_channel_ids,
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG,
 )
 
@@ -1103,6 +1103,7 @@ with tab_import:
     st.markdown("**支持的格式（每行一个）：**")
     st.code("""https://www.youtube.com/channel/UCxxxxxxxxxxxx
 https://www.youtube.com/@频道名
+@频道名
 UCxxxxxxxxxxxx""", language=None)
     st.markdown("")
 
@@ -1124,38 +1125,31 @@ UCxxxxxxxxxxxx""", language=None)
         elif not st.session_state.api_key:
             st.error("需要 YouTube API Key 来查询频道信息")
         else:
-            # 解析输入
+            # 解析输入：每行一个，格式转换统一交给 resolve_channel_ids
+            # （UC ID 直接用；@handle 和链接会自动反查成频道ID；无法识别的计入失败）
             lines = [l.strip() for l in import_text.strip().split("\n") if l.strip()]
-            channel_ids = []
-            for line in lines:
-                # 提取频道ID
-                if line.startswith("UC") and len(line) == 24:
-                    channel_ids.append(line)
-                elif "/channel/" in line:
-                    match = re.search(r'/channel/(UC[\w-]+)', line)
-                    if match:
-                        channel_ids.append(match.group(1))
-                elif line.startswith("@"):
-                    # @handle 格式，需要通过搜索获取ID（消耗配额）
-                    channel_ids.append(line)  # 后续处理
-                else:
-                    channel_ids.append(line)
 
-            if not channel_ids:
+            if not lines:
                 st.error("未能解析出有效的频道ID")
             else:
                 db = get_db()
-                with st.spinner(f"正在导入 {len(channel_ids)} 个频道..."):
+                with st.spinner(f"正在导入 {len(lines)} 个频道..."):
                     if db:
                         result = db.import_existing(
-                            channel_ids, st.session_state.api_key,
+                            lines, st.session_state.api_key,
                             st.session_state.quota, status=import_status,
                             imported_by=st.session_state.user_name,
                         )
-                        st.success(f"✅ 导入完成：成功 {result['success']}，跳过（已存在）{result['skipped']}，失败 {result['failed']}")
+                        msg = (f"✅ 导入完成：成功 {result['success']}，"
+                               f"跳过（已存在）{result['skipped']}，失败 {result['failed']}")
+                        if result["failed"] > 0:
+                            msg += "（失败 = 链接格式无法识别，或频道已不存在）"
+                        st.success(msg)
                     else:
                         # 本地模式
-                        chs = get_channels(channel_ids, st.session_state.api_key, st.session_state.quota)
+                        resolved, bad = resolve_channel_ids(
+                            lines, st.session_state.api_key, st.session_state.quota)
+                        chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
                         added = 0
                         for cid, info in chs.items():
                             info["status"] = import_status
@@ -1164,7 +1158,7 @@ UCxxxxxxxxxxxx""", language=None)
                             info["notes"] = "批量导入"
                             st.session_state.local_db.append(info)
                             added += 1
-                        st.success(f"✅ 已导入 {added} 个频道（本地模式）")
+                        st.success(f"✅ 已导入 {added} 个频道（本地模式），无法识别 {bad} 行")
 
 
 # ============================================================
