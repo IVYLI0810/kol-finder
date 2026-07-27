@@ -11,6 +11,8 @@ import html as html_lib
 from datetime import datetime, timedelta
 from io import BytesIO
 
+from streamlit_local_storage import LocalStorage
+
 from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
@@ -49,6 +51,12 @@ st.markdown("""
         background-attachment: fixed;
     }
     footer { visibility: hidden; }
+
+    /* ---------- 弹窗遮罩：周围变暗的经典 popup 效果 ---------- */
+    /* Streamlit 默认遮罩是白色半透明（看着像变亮），改成深色半透明 */
+    .stDialog {
+        background: rgba(28, 28, 30, 0.55) !important;
+    }
 
     h1, h2, h3, h4 {
         font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
@@ -571,6 +579,27 @@ def generate_email_draft(ch: dict, user_name: str, kkt_id: str) -> tuple[str, st
     return subject, body
 
 
+@st.dialog("📧 BD邮件草稿", width="large")
+def bd_email_dialog(rec):
+    """弹窗展示个性化 BD 邮件：主题可改，正文一键复制。"""
+    cid = rec.get("channel_id", "")
+    # 落款优先用"邮件署名"（韩文/英文名），没填才回退到内部中文名
+    sender = st.session_state.config.get("sender_name", "") or st.session_state.user_name
+    kkt = st.session_state.config.get("kkt_id", "")
+    subj, body = generate_email_draft(rec, sender, kkt)
+
+    st.caption("已自动填入该博主信息和你的专属署名。点正文块右上角 📋 图标即可一键复制，粘贴到阿里邮箱发送。")
+    st.text_input("邮件主题（可改）", value=subj, key=f"dlg_subj_{cid}")
+
+    with st.expander("✏️ 微调正文（可选 · 展开编辑）"):
+        body = st.text_area("正文", value=body, height=240, key=f"dlg_body_{cid}",
+                            label_visibility="collapsed")
+        st.caption("改完后，下方复制块会同步更新")
+
+    st.markdown("##### 📋 邮件正文（点右上角图标一键复制）")
+    st.code(body, language=None)
+
+
 # ============================================================
 # 侧边栏
 # ============================================================
@@ -627,18 +656,87 @@ with st.sidebar:
     if st.session_state.user_name and chosen == st.session_state.user_name:
         pass  # 名字已生效（下拉框会显示选中状态），不再额外弹问候框，保持侧边栏干净
 
-    # ---------- YouTube API Key：每次自己填，不存数据库 ----------
+    # ---------- BD邮件身份：署名 + 卡考Talk ID（生成韩语BD邮件时用） ----------
+    st.markdown("")
+    st.markdown("#### 📧 BD邮件身份")
+    st.caption("生成韩语 BD 邮件时用，每人各填各的，互不影响")
+
+    _cfg = st.session_state.config
+    _ukey = st.session_state.user_name or "guest"
+
+    sb_sender = st.text_input(
+        "邮件署名（韩文/英文名）",
+        value=_cfg.get("sender_name", ""),
+        key=f"sb_sender_{_ukey}",
+        placeholder="例如：만의 或 Ivy",
+        help="BD 邮件落款用这个名字（韩国博主看），不显示你的内部中文名。没填则回退到内部名。",
+    )
+    if sb_sender != _cfg.get("sender_name", ""):
+        st.session_state.config["sender_name"] = sb_sender
+
+    sb_kkt = st.text_input(
+        "카카오톡 ID",
+        value=_cfg.get("kkt_id", ""),
+        key=f"sb_kkt_{_ukey}",
+        placeholder="例如：ivy_aliexpress",
+        help="BD 邮件末尾附上这个 ID，方便博主加你。",
+    )
+    if sb_kkt != _cfg.get("kkt_id", ""):
+        st.session_state.config["kkt_id"] = sb_kkt
+
+    if st.button("💾 保存我的BD身份", key="save_bd_id", use_container_width=True):
+        st.session_state.config["sender_name"] = sb_sender.strip()
+        st.session_state.config["kkt_id"] = sb_kkt.strip()
+        _db_id = get_db()
+        if _db_id and st.session_state.user_name:
+            if _db_id.save_user_settings(st.session_state.user_name, st.session_state.config):
+                st.success("✅ BD身份已保存，下次打开自动加载")
+            else:
+                st.warning("⚠️ 本次生效，但未能存入数据库（刷新后恢复）")
+        elif not st.session_state.user_name:
+            st.warning("⚠️ 请先在上面选好你的名字，才能保存")
+        else:
+            st.success("✅ 已保存（本地模式，刷新后恢复）")
+
+    # ---------- YouTube API Key：可记住在自己浏览器，刷新不用重填 ----------
     st.markdown("")
     st.markdown("#### 🔑 YouTube API Key")
+
+    # 浏览器记忆组件：Key 只存在你自己电脑的浏览器里，不上传服务器/数据库
+    _ls = LocalStorage(key="yt_key_store")
+    _stored_key = _ls.getItem("yt_api_key")
+    # 打开页面时：浏览器里记住过 Key 且当前还没填，就自动回填
+    if _stored_key and not st.session_state.api_key:
+        st.session_state.api_key = _stored_key
+        st.session_state.quota = QuotaTracker()
+
     api_key_input = st.text_input(
         "API Key", value=st.session_state.api_key, type="password",
         label_visibility="collapsed",
-        help="Google Cloud Console 获取，免费10,000 units/天。为安全起见不存数据库，每次自己填。",
+        help="Google Cloud Console 获取，免费10,000 units/天。点「记住」后只存在你自己浏览器，刷新不用重填。",
         placeholder="粘贴你的 YouTube API Key",
     )
     if api_key_input != st.session_state.api_key:
         st.session_state.api_key = api_key_input
         st.session_state.quota = QuotaTracker()
+
+    _c_remember, _c_forget = st.columns([1, 1])
+    with _c_remember:
+        if st.button("💾 记住", key="remember_key", use_container_width=True,
+                     help="只存在你自己电脑的浏览器里，不上传服务器，换台电脑要重填"):
+            if api_key_input.strip():
+                _ls.setItem("yt_api_key", api_key_input.strip(), key="do_remember")
+                st.success("✅ 已记住，以后刷新自动填好")
+            else:
+                st.warning("先粘贴 Key 再点记住哦")
+    with _c_forget:
+        if st.button("🗑 忘掉", key="forget_key", use_container_width=True,
+                     help="把这个浏览器里记住的 Key 清掉"):
+            _ls.deleteItem("yt_api_key", key="do_forget")
+            st.session_state.api_key = ""
+            st.session_state.quota = QuotaTracker()
+            st.warning("已忘掉，下次要重新粘贴")
+    st.caption("🔒 Key 只存在你自己浏览器，不上传服务器，全队互不影响")
 
     # ---------- 如何获取 API Key：点击展开看步骤 ----------
     with st.expander("📖 如何获取 API Key？（点我看步骤）"):
@@ -688,8 +786,13 @@ if st.session_state.user_name:
                     _merged["weights"] = {**DEFAULT_CONFIG["weights"], **_personal["weights"]}
                 if "dedup_rules" in _personal:
                     _merged["dedup_rules"] = {**DEFAULT_CONFIG["dedup_rules"], **_personal["dedup_rules"]}
+                # BD邮件身份（署名 + 卡考Talk ID）也从个人档案恢复
+                _merged["sender_name"] = _personal.get("sender_name", "")
+                _merged["kkt_id"] = _personal.get("kkt_id", "")
                 st.session_state.config = _merged
         st.session_state._settings_loaded_for = st.session_state.user_name
+        # 加载完刷新一次，让侧边栏"BD邮件身份"立刻显示当前身份的值
+        st.rerun()
 
 
 # ============================================================
@@ -957,21 +1060,8 @@ with tab_search:
                         st.session_state.search_results.remove(ch)
                         st.rerun()
                 with col_a3:
-                    _email_key = f"email_open_{ch['channel_id']}"
                     if st.button("📧 生成BD邮件", key=f"genmail_{idx}", use_container_width=True):
-                        st.session_state[_email_key] = not st.session_state.get(_email_key, False)
-
-                # 邮件草稿（点"生成BD邮件"后展开，可编辑后复制）
-                if st.session_state.get(f"email_open_{ch['channel_id']}", False):
-                    _subj, _body = generate_email_draft(
-                        ch, st.session_state.user_name,
-                        st.session_state.config.get("kkt_id", ""),
-                    )
-                    st.markdown("")
-                    st.text_input("邮件主题（可改）", value=_subj, key=f"subj_{idx}")
-                    st.text_area("邮件正文（可改 · 全选复制后粘贴到阿里邮箱）",
-                                 value=_body, height=420, key=f"body_{idx}")
-                    st.caption("👆 已按团队 BD 模板自动生成并填入该博主信息，可直接微调措辞后复制发送")
+                        bd_email_dialog(ch)
                 st.markdown("")
 
             # 批量操作
@@ -1090,8 +1180,8 @@ with tab_database:
         st.markdown(f"显示 {len(filtered_db)} / {len(records)} 条")
         st.markdown("")
 
-        # 列表（三列小卡片，打标按键全部收进卡片内）
-        num_cols = 3
+        # 列表（两列卡片，更宽松；打标按键全部收进卡片内）
+        num_cols = 2
         total_db = len(filtered_db)
         for row_start in range(0, total_db, num_cols):
             cols = st.columns(num_cols)
@@ -1130,8 +1220,8 @@ with tab_database:
                             <span class="cat-tag">📂 {_safe(cat)}</span>
                         </div>
                         <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
-                        {'<div class="kol-sub">👤 挖掘人：' + _safe(discoverer) + '</div>' if discoverer else ''}
-                        {'<div class="kol-email">📧 <span class="email-chip">' + _safe(email) + '</span></div>' if email else ''}
+                        <div class="kol-sub">👤 挖掘人：{_safe(discoverer) if discoverer else '—'}</div>
+                        <div class="kol-email">📧 <span class="email-chip">{_safe(email) if email else '未公开'}</span></div>
                         <hr class="kol-divider">
                         """)
 
@@ -1153,51 +1243,64 @@ with tab_database:
                                         lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             st.rerun()
 
-                        # 复查 / 删除 / 备注
+                        # 复查 / 删除 / 备注（按钮只捕获点击，处理逻辑统一放到列外，
+                        # 避免提示语在窄列里被挤成竖排）
                         c_rc, c_rm, c_nt = st.columns([1, 1, 4])
                         with c_rc:
-                            if st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary"):
-                                if st.session_state.api_key:
-                                    with st.spinner("复查中..."):
-                                        chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
-                                        if chs:
-                                            ch_info = list(chs.values())[0]
-                                            result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
-                                            db = get_db()
-                                            cid = rec.get("channel_id", "")
-                                            if result:
-                                                result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
-                                                if db:
-                                                    db.update_last_checked(cid, True, result)
-                                                st.success(f"✅ {name} 仍然活跃")
-                                            else:
-                                                if db:
-                                                    db.update_last_checked(cid, False)
-                                                st.warning(f"⚠️ {name} 已不活跃")
-                                else:
-                                    st.error("需要API Key")
+                            do_recheck = st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary")
                         with c_rm:
-                            if st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary"):
-                                db = get_db()
-                                cid = rec.get("channel_id", "")
-                                if db:
-                                    db.remove(cid)
-                                else:
-                                    st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                                st.rerun()
+                            do_remove = st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary")
                         with c_nt:
                             note_val = st.text_input("备注", value=notes, key=f"nt_{idx}",
                                                      placeholder="例：已发邮件、回复快、要价高...",
                                                      label_visibility="collapsed")
-                            if note_val != notes:
-                                db = get_db()
-                                cid = rec.get("channel_id", "")
-                                if db:
-                                    db.update_notes(cid, note_val)
-                                else:
-                                    for lr in st.session_state.local_db:
-                                        if lr.get("channel_id") == cid:
-                                            lr["notes"] = note_val
+
+                        # BD邮件（弹窗形式，正文一键复制）
+                        if st.button("📧 生成BD邮件", key=f"genmail_db_{idx}", use_container_width=True):
+                            bd_email_dialog(rec)
+
+                        # 备注更新
+                        if note_val != notes:
+                            db = get_db()
+                            cid = rec.get("channel_id", "")
+                            if db:
+                                db.update_notes(cid, note_val)
+                            else:
+                                for lr in st.session_state.local_db:
+                                    if lr.get("channel_id") == cid:
+                                        lr["notes"] = note_val
+
+                        # 复查处理（整卡宽度渲染，提示语不会竖排）
+                        if do_recheck:
+                            if st.session_state.api_key:
+                                with st.spinner("复查中..."):
+                                    chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
+                                    if chs:
+                                        ch_info = list(chs.values())[0]
+                                        result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
+                                        db = get_db()
+                                        cid = rec.get("channel_id", "")
+                                        if result:
+                                            result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
+                                            if db:
+                                                db.update_last_checked(cid, True, result)
+                                            st.success(f"✅ {name} 仍然活跃")
+                                        else:
+                                            if db:
+                                                db.update_last_checked(cid, False)
+                                            st.warning(f"⚠️ {name} 已不活跃")
+                            else:
+                                st.error("需要 API Key，请先在左侧填入后再复查")
+
+                        # 删除处理
+                        if do_remove:
+                            db = get_db()
+                            cid = rec.get("channel_id", "")
+                            if db:
+                                db.remove(cid)
+                            else:
+                                st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                            st.rerun()
 
         # 导出
         st.markdown("---")
@@ -1361,16 +1464,6 @@ with tab_settings:
     with col_d4:
         d_discover = st.number_input("新发现（天）", value=rules["discovered_days"], step=1)
 
-    # BD 邮件签名
-    st.markdown("")
-    st.markdown("#### 📧 BD邮件签名（生成邮件时用）")
-    kkt_id = st.text_input(
-        "你的卡考 Talk ID（카카오톡 ID）",
-        value=config.get("kkt_id", ""),
-        placeholder="例如：ivy_aliexpress",
-        help="生成的韩语 BD 邮件末尾会附上这个 ID，方便博主加你。每人各填各的，互不影响。",
-    )
-
     # 保存按钮
     st.markdown("")
     if st.button("💾 保存我的设置", use_container_width=True):
@@ -1387,7 +1480,9 @@ with tab_settings:
                 "onboarded_days": d_onboard, "rejected_days": d_reject,
                 "emailed_days": d_email, "discovered_days": d_discover,
             },
-            "kkt_id": kkt_id.strip(),
+            # BD邮件身份在左侧身份栏维护，这里原样保留，避免保存评分设置时丢失
+            "sender_name": st.session_state.config.get("sender_name", ""),
+            "kkt_id": st.session_state.config.get("kkt_id", ""),
         }
         # 持久化到数据库（下次打开还是你的设置）
         _db_save = get_db()
