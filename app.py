@@ -215,30 +215,41 @@ st.markdown("""
     .kol-name { font-size: 14px; }
     .kol-stats { font-size: 11.5px; }
 
-    /* ---------- 列表模式：一行一个博主（紧凑表格行）----------
+    /* ---------- 列表模式：一行一个博主（窄表格行 · 内容上下居中）----------
        原理同卡片：行容器内第一个元素是隐藏的 .kol-row-marker */
     .kol-row-marker { display: none; }
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) {
         background: #fffdf7;
         border: 2.5px solid #1c1c1e; border-radius: 12px;
         box-shadow: 3px 3px 0 rgba(28,28,30,.55);
-        padding: 8px 14px;
+        padding: 3px 14px;
+        gap: 0 !important;
     }
-    /* 行内各列垂直居中、列间距收紧、容器内元素不留额外外边距 */
+    /* 容器内元素不留额外外边距、列间距收紧 */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) > .element-container { margin: 0 !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 10px; align-items: center; }
-    /* 行内文字样式 */
-    .row-name a { font-size: 14px; font-weight: 800; color: #1c1c1e; text-decoration: none; }
+    /* 各列内容上下居中：列本身居中对齐 + 列内内容也居中 */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 10px; align-items: center !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] { justify-content: center !important; }
+    /* 上下居中修复：Streamlit 把每个文字格子的高度锁成单行高（约24px），而"昵称+邮箱"是两行（约40px），
+       多出的内容向下溢出、显得文字整体偏下。这里只把"文字格子"(.stMarkdown)上移 8px 补偿，
+       让"昵称+邮箱"整体落在行的几何中心。
+       注意：千万不能把这个位移加在 stHorizontalBlock 上——操作按钮那一列里还嵌套了一个小横向区块，
+       会被移两次、导致按钮比文字高出一截；按钮和状态下拉本身位置是准的，不需要动。
+       若以后调字号导致偏移变化，只需微调这个 -8px。 */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stMarkdown { transform: translateY(-8px); }
+    /* 行内文字样式（字号收小、行距收紧，整行更窄） */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stMarkdown p { margin: 0 !important; line-height: 1.25; }
+    .row-name a { font-size: 13px; font-weight: 800; color: #1c1c1e; text-decoration: none; }
     .row-name a:hover { color: #8674d6; }
-    .row-email { font-size: 11px; color: #6b5a9e; margin-top: 2px; word-break: break-all; }
-    .row-num { font-size: 12.5px; color: #1c1c1e; font-weight: 700; }
-    .row-who { font-size: 12px; color: #a05c74; font-weight: 600; }
-    .row-cat { font-size: 10.5px !important; padding: 3px 9px !important; }
-    /* 行内控件缩小：下拉 32px、圆钮 28px、邮件按钮 28px */
+    .row-email { font-size: 10.5px; color: #6b5a9e; word-break: break-all; }
+    .row-num { font-size: 12px; color: #1c1c1e; font-weight: 700; }
+    .row-who { font-size: 11.5px; color: #a05c74; font-weight: 600; }
+    .row-cat { font-size: 10px !important; padding: 2px 8px !important; }
+    /* 行内控件缩小：下拉 28px、圆钮 24px、邮件按钮 24px */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stSelectbox"] [role="group"],
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) div[data-baseweb="select"] > div { min-height: 32px !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 28px !important; height: 28px !important; min-height: 28px !important; font-size: 12px !important; padding: 0 !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stButton button:not([data-testid="stBaseButton-primary"]) { height: 28px !important; min-height: 28px !important; font-size: 11.5px !important; padding: 0 10px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) div[data-baseweb="select"] > div { min-height: 28px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 24px !important; height: 24px !important; min-height: 24px !important; font-size: 11px !important; padding: 0 !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stButton button:not([data-testid="stBaseButton-primary"]) { height: 24px !important; min-height: 24px !important; font-size: 11px !important; padding: 0 9px !important; }
 
     /* ---------- 侧边栏：纯浅粉 + 粗黑右边框（无毛玻璃） ---------- */
     section[data-testid="stSidebar"] {
@@ -1381,15 +1392,15 @@ with tab_database:
                     r1, r2, r3, r4, r5, r6, r7 = st.columns([2.4, 1, 0.9, 0.7, 1.2, 0.9, 1.9])
                     with r1:
                         _render_html(
-                            f'<div class="row-name"><a href="{url}" target="_blank">{_safe(name)}</a></div>'
-                            f'<div class="row-email">📧 {_safe(email) if email else "未公开"}</div>'
+                            f'<span class="row-name"><a href="{url}" target="_blank">{_safe(name)}</a></span><br>'
+                            f'<span class="row-email">📧 {_safe(email) if email else "未公开"}</span>'
                         )
                     with r2:
                         _render_html(f'<span class="cat-tag row-cat">📂 {_safe(cat)}</span>')
                     with r3:
-                        _render_html(f'<div class="row-num">📺 {subs:,}</div>')
+                        _render_html(f'<span class="row-num">📺 {subs:,}</span>')
                     with r4:
-                        _render_html(f'<div class="row-num">⭐ {score}</div>')
+                        _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
                         new_status = st.selectbox(
                             "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
@@ -1408,7 +1419,7 @@ with tab_database:
                                         lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             st.rerun()
                     with r6:
-                        _render_html(f'<div class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</div>')
+                        _render_html(f'<span class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</span>')
                     with r7:
                         a_rc, a_rm, a_ml = st.columns([1, 1, 2.4])
                         with a_rc:
