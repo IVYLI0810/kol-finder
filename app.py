@@ -669,6 +669,19 @@ with tab_search:
 
         st.markdown("")
 
+        # ---------- 搜索模式：按时间（小博主多）/ 按相关性（更对口） ----------
+        if "search_order" not in st.session_state:
+            st.session_state.search_order = "🕐 按时间（新视频优先，小博主更多）"
+        order_choice = st.radio(
+            "搜索模式",
+            ["🕐 按时间（新视频优先，小博主更多）", "🎯 按相关性（内容更对口）"],
+            index=0 if st.session_state.search_order.startswith("🕐") else 1,
+            horizontal=True,
+            help="按时间：搜最近60天的新视频，活跃小博主更容易被挖到；按相关性：搜最匹配的视频，内容更精准但大频道偏多。两种配额消耗相同。",
+        )
+        st.session_state.search_order = order_choice
+        search_order_api = "date" if order_choice.startswith("🕐") else "relevance"
+
         # ---------- 自定义关键词 ----------
         col1, col2, col3 = st.columns([3, 1, 1])
         with col1:
@@ -704,6 +717,7 @@ with tab_search:
                     quota=st.session_state.quota,
                     config=st.session_state.config,
                     db_records=db_records,
+                    order=search_order_api,
                 )
                 st.session_state.search_results = results
                 st.session_state.search_log.append({
@@ -733,6 +747,7 @@ with tab_search:
                     quota=st.session_state.quota,
                     config=st.session_state.config,
                     db_records=db_records,
+                    order=search_order_api,
                 )
                 all_results.extend(results)
                 progress.progress((i + 1) / len(keywords))

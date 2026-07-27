@@ -608,9 +608,11 @@ def should_exclude(channel_id: str, db_records: list[dict], config: dict = None)
 # ============================================================
 
 def search_and_verify(keyword: str, category: str, api_key: str, quota: QuotaTracker,
-                      config: dict = None, db_records: list[dict] = None) -> list[dict]:
+                      config: dict = None, db_records: list[dict] = None,
+                      order: str = "date") -> list[dict]:
     """
     完整流程：搜索 → 提取频道 → 去重 → 验证 → 评分
+    order: "date" 按时间（小博主更多）/ "relevance" 按相关性（更对口）
     """
     if config is None:
         config = DEFAULT_CONFIG
@@ -622,7 +624,7 @@ def search_and_verify(keyword: str, category: str, api_key: str, quota: QuotaTra
     threshold = config.get("score_threshold", 60)
 
     # Step 1: 搜索视频（搜索接口固定100单位/次，抓50个不增加配额，候选池翻倍）
-    videos = search_videos(keyword, api_key, quota, max_results=50)
+    videos = search_videos(keyword, api_key, quota, max_results=50, order=order)
     if not videos:
         return []
 
