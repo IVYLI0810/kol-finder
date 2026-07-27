@@ -129,17 +129,21 @@ def _get(url: str, params: dict, api_key: str, quota: QuotaTracker, cost: int, a
 # ============================================================
 
 def search_videos(keyword: str, api_key: str, quota: QuotaTracker,
-                  max_results: int = 25, order: str = "relevance") -> list[dict]:
+                  max_results: int = 25, order: str = "date") -> list[dict]:
     """
     按关键词搜索视频
     消耗：100 units/次
+    默认按上传时间排序 + 限近60天：小博主活跃更新更容易被搜到，
+    大频道的老热门视频不再霸占前排，候选池里小频道比例显著提高。
     """
+    published_after = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
     params = {
         "part": "snippet",
         "q": keyword,
         "type": "video",
         "maxResults": max_results,
         "order": order,
+        "publishedAfter": published_after,
         "regionCode": "KR",
         "relevanceLanguage": "ko",
     }
