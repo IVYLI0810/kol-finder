@@ -204,6 +204,42 @@ st.markdown("""
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stTextInput input { height: 40px !important; }
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 40px !important; height: 40px !important; min-height: 40px !important; }
 
+    /* ---------- 卡片模式改三列：整体再缩小一号（对应预览稿）----------
+       覆盖上方的 40px 控件为 32/34px，padding/字号同步收紧，紧凑但不挤 */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { padding: 12px; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) [data-testid="stSelectbox"] [role="group"],
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) div[data-baseweb="select"] > div { min-height: 34px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stTextInput input { height: 34px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 32px !important; height: 32px !important; min-height: 32px !important; font-size: 13px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) .stButton button:not([data-testid="stBaseButton-primary"]) { height: 34px !important; min-height: 34px !important; font-size: 12.5px !important; }
+    .kol-name { font-size: 14px; }
+    .kol-stats { font-size: 11.5px; }
+
+    /* ---------- 列表模式：一行一个博主（紧凑表格行）----------
+       原理同卡片：行容器内第一个元素是隐藏的 .kol-row-marker */
+    .kol-row-marker { display: none; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) {
+        background: #fffdf7;
+        border: 2.5px solid #1c1c1e; border-radius: 12px;
+        box-shadow: 3px 3px 0 rgba(28,28,30,.55);
+        padding: 8px 14px;
+    }
+    /* 行内各列垂直居中、列间距收紧、容器内元素不留额外外边距 */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) > .element-container { margin: 0 !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 10px; align-items: center; }
+    /* 行内文字样式 */
+    .row-name a { font-size: 14px; font-weight: 800; color: #1c1c1e; text-decoration: none; }
+    .row-name a:hover { color: #8674d6; }
+    .row-email { font-size: 11px; color: #6b5a9e; margin-top: 2px; word-break: break-all; }
+    .row-num { font-size: 12.5px; color: #1c1c1e; font-weight: 700; }
+    .row-who { font-size: 12px; color: #a05c74; font-weight: 600; }
+    .row-cat { font-size: 10.5px !important; padding: 3px 9px !important; }
+    /* 行内控件缩小：下拉 32px、圆钮 28px、邮件按钮 28px */
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stSelectbox"] [role="group"],
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) div[data-baseweb="select"] > div { min-height: 32px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stButton button[data-testid="stBaseButton-primary"] { width: 28px !important; height: 28px !important; min-height: 28px !important; font-size: 12px !important; padding: 0 !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) .stButton button:not([data-testid="stBaseButton-primary"]) { height: 28px !important; min-height: 28px !important; font-size: 11.5px !important; padding: 0 10px !important; }
+
     /* ---------- 侧边栏：纯浅粉 + 粗黑右边框（无毛玻璃） ---------- */
     section[data-testid="stSidebar"] {
         background-color: #ffd9e3;
@@ -789,6 +825,8 @@ if st.session_state.user_name:
                 # BD邮件身份（署名 + 卡考Talk ID）也从个人档案恢复
                 _merged["sender_name"] = _personal.get("sender_name", "")
                 _merged["kkt_id"] = _personal.get("kkt_id", "")
+                # 网红库显示模式（卡片/列表）也从个人档案恢复
+                _merged["view_mode"] = _personal.get("view_mode", "card")
                 st.session_state.config = _merged
         st.session_state._settings_loaded_for = st.session_state.user_name
         # 加载完刷新一次，让侧边栏"BD邮件身份"立刻显示当前身份的值
@@ -1177,59 +1215,186 @@ with tab_database:
         }
         filtered_db.sort(key=sort_map[db_sort], reverse=True)
 
-        st.markdown(f"显示 {len(filtered_db)} / {len(records)} 条")
+        # 工具条：显示模式切换（左）+ 计数（右）
+        _vm_saved = st.session_state.config.get("view_mode", "card")
+        col_vm, col_cnt = st.columns([4, 2])
+        with col_vm:
+            view_mode_label = st.radio(
+                "显示模式", ["🗂 卡片模式", "📋 列表模式"],
+                horizontal=True,
+                index=0 if _vm_saved == "card" else 1,
+                key="db_view_radio",
+                label_visibility="collapsed",
+                help="卡片模式适合逐个看详情；列表模式适合快速扫全库、批量改状态",
+            )
+        with col_cnt:
+            st.markdown(f"显示 {len(filtered_db)} / {len(records)} 条")
+        view_mode = "card" if view_mode_label == "🗂 卡片模式" else "list"
+        # 记住选择（存进个人档案，下次打开自动恢复）
+        if view_mode != _vm_saved:
+            st.session_state.config["view_mode"] = view_mode
+            _db_vm = get_db()
+            if _db_vm and st.session_state.user_name:
+                _db_vm.save_user_settings(st.session_state.user_name, st.session_state.config)
         st.markdown("")
 
-        # 列表（两列卡片，更宽松；打标按键全部收进卡片内）
-        num_cols = 2
         total_db = len(filtered_db)
-        for row_start in range(0, total_db, num_cols):
-            cols = st.columns(num_cols)
-            for j in range(num_cols):
-                idx = row_start + j
-                if idx >= total_db:
-                    break
-                rec = filtered_db[idx]
-                with cols[j]:
-                    with st.container():
-                        # 隐藏标记：让外层容器变成卡片（见CSS :has()规则）
-                        st.markdown('<div class="kol-card-marker"></div>', unsafe_allow_html=True)
 
-                        status = rec.get("status", "新发现")
-                        status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
-                                       "已引入": "status-onboard", "已拒绝": "status-reject",
-                                       "已淘汰": "status-reject"}.get(status, "status-new")
+        if view_mode == "card":
+            # 卡片模式：三列紧凑小卡片（打标按键全部收进卡片内）
+            num_cols = 3
+            for row_start in range(0, total_db, num_cols):
+                cols = st.columns(num_cols)
+                for j in range(num_cols):
+                    idx = row_start + j
+                    if idx >= total_db:
+                        break
+                    rec = filtered_db[idx]
+                    with cols[j]:
+                        with st.container():
+                            # 隐藏标记：让外层容器变成卡片（见CSS :has()规则）
+                            st.markdown('<div class="kol-card-marker"></div>', unsafe_allow_html=True)
 
-                        name = rec.get("channel_name", "未知")
-                        url = rec.get("channel_url", "#")
-                        subs = rec.get("subscribers", 0)
-                        score = rec.get("score_total", "-")
-                        cat = rec.get("category", "")
-                        discoverer = rec.get("discovered_by", "")
-                        email = rec.get("emails", "")
-                        notes = rec.get("notes", "")
+                            status = rec.get("status", "新发现")
+                            status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
+                                           "已引入": "status-onboard", "已拒绝": "status-reject",
+                                           "已淘汰": "status-reject"}.get(status, "status-new")
 
-                        # 卡片信息（紧凑版）
-                        _render_html(f"""
-                        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-                            <span class="kol-name">{_safe(name)}</span>
-                            <a class="kol-home" href="{url}" target="_blank">主页 ↗</a>
-                        </div>
-                        <div class="kol-tags">
-                            <span class="status-tag {status_class}">{status}</span>
-                            <span class="cat-tag">📂 {_safe(cat)}</span>
-                        </div>
-                        <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
-                        <div class="kol-sub">👤 挖掘人：{_safe(discoverer) if discoverer else '—'}</div>
-                        <div class="kol-email">📧 <span class="email-chip">{_safe(email) if email else '未公开'}</span></div>
-                        <hr class="kol-divider">
-                        """)
+                            name = rec.get("channel_name", "未知")
+                            url = rec.get("channel_url", "#")
+                            subs = rec.get("subscribers", 0)
+                            score = rec.get("score_total", "-")
+                            cat = rec.get("category", "")
+                            discoverer = rec.get("discovered_by", "")
+                            email = rec.get("emails", "")
+                            notes = rec.get("notes", "")
 
-                        # 状态下拉
+                            # 卡片信息（紧凑版）
+                            _render_html(f"""
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                                <span class="kol-name">{_safe(name)}</span>
+                                <a class="kol-home" href="{url}" target="_blank">主页 ↗</a>
+                            </div>
+                            <div class="kol-tags">
+                                <span class="status-tag {status_class}">{status}</span>
+                                <span class="cat-tag">📂 {_safe(cat)}</span>
+                            </div>
+                            <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
+                            <div class="kol-sub">👤 挖掘人：{_safe(discoverer) if discoverer else '—'}</div>
+                            <div class="kol-email">📧 <span class="email-chip">{_safe(email) if email else '未公开'}</span></div>
+                            <hr class="kol-divider">
+                            """)
+
+                            # 状态下拉
+                            new_status = st.selectbox(
+                                "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
+                                index=["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"].index(status),
+                                key=f"st_{idx}", label_visibility="collapsed",
+                            )
+                            if new_status != status:
+                                db = get_db()
+                                cid = rec.get("channel_id", "")
+                                if db:
+                                    db.update_status(cid, new_status)
+                                else:
+                                    for lr in st.session_state.local_db:
+                                        if lr.get("channel_id") == cid:
+                                            lr["status"] = new_status
+                                            lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                st.rerun()
+
+                            # 复查 / 删除 / 备注（按钮只捕获点击，处理逻辑统一放到列外，
+                            # 避免提示语在窄列里被挤成竖排）
+                            c_rc, c_rm, c_nt = st.columns([1, 1, 4])
+                            with c_rc:
+                                do_recheck = st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary")
+                            with c_rm:
+                                do_remove = st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary")
+                            with c_nt:
+                                note_val = st.text_input("备注", value=notes, key=f"nt_{idx}",
+                                                         placeholder="例：已发邮件、回复快、要价高...",
+                                                         label_visibility="collapsed")
+
+                            # BD邮件（弹窗形式，正文一键复制）
+                            if st.button("📧 生成BD邮件", key=f"genmail_db_{idx}", use_container_width=True):
+                                bd_email_dialog(rec)
+
+                            # 备注更新
+                            if note_val != notes:
+                                db = get_db()
+                                cid = rec.get("channel_id", "")
+                                if db:
+                                    db.update_notes(cid, note_val)
+                                else:
+                                    for lr in st.session_state.local_db:
+                                        if lr.get("channel_id") == cid:
+                                            lr["notes"] = note_val
+
+                            # 复查处理（整卡宽度渲染，提示语不会竖排）
+                            if do_recheck:
+                                if st.session_state.api_key:
+                                    with st.spinner("复查中..."):
+                                        chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
+                                        if chs:
+                                            ch_info = list(chs.values())[0]
+                                            result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
+                                            db = get_db()
+                                            cid = rec.get("channel_id", "")
+                                            if result:
+                                                result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
+                                                if db:
+                                                    db.update_last_checked(cid, True, result)
+                                                st.success(f"✅ {name} 仍然活跃")
+                                            else:
+                                                if db:
+                                                    db.update_last_checked(cid, False)
+                                                st.warning(f"⚠️ {name} 已不活跃")
+                                else:
+                                    st.error("需要 API Key，请先在左侧填入后再复查")
+
+                            # 删除处理
+                            if do_remove:
+                                db = get_db()
+                                cid = rec.get("channel_id", "")
+                                if db:
+                                    db.remove(cid)
+                                else:
+                                    st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                                st.rerun()
+        else:
+            # 列表模式：一行一个博主，字段对齐成表格，适合快速扫全库
+            for idx, rec in enumerate(filtered_db):
+                with st.container():
+                    # 隐藏标记：让外层容器变成列表行（见CSS :has()规则）
+                    st.markdown('<div class="kol-row-marker"></div>', unsafe_allow_html=True)
+
+                    status = rec.get("status", "新发现")
+                    name = rec.get("channel_name", "未知")
+                    url = rec.get("channel_url", "#")
+                    subs = rec.get("subscribers", 0)
+                    score = rec.get("score_total", "-")
+                    cat = rec.get("category", "")
+                    discoverer = rec.get("discovered_by", "")
+                    email = rec.get("emails", "")
+
+                    # 一行七列：频道/邮箱 · 垂类 · 订阅 · 评分 · 状态 · 挖掘人 · 操作
+                    r1, r2, r3, r4, r5, r6, r7 = st.columns([2.4, 1, 0.9, 0.7, 1.2, 0.9, 1.9])
+                    with r1:
+                        _render_html(
+                            f'<div class="row-name"><a href="{url}" target="_blank">{_safe(name)}</a></div>'
+                            f'<div class="row-email">📧 {_safe(email) if email else "未公开"}</div>'
+                        )
+                    with r2:
+                        _render_html(f'<span class="cat-tag row-cat">📂 {_safe(cat)}</span>')
+                    with r3:
+                        _render_html(f'<div class="row-num">📺 {subs:,}</div>')
+                    with r4:
+                        _render_html(f'<div class="row-num">⭐ {score}</div>')
+                    with r5:
                         new_status = st.selectbox(
                             "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
                             index=["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"].index(status),
-                            key=f"st_{idx}", label_visibility="collapsed",
+                            key=f"lst_{idx}", label_visibility="collapsed",
                         )
                         if new_status != status:
                             db = get_db()
@@ -1242,65 +1407,50 @@ with tab_database:
                                         lr["status"] = new_status
                                         lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             st.rerun()
-
-                        # 复查 / 删除 / 备注（按钮只捕获点击，处理逻辑统一放到列外，
-                        # 避免提示语在窄列里被挤成竖排）
-                        c_rc, c_rm, c_nt = st.columns([1, 1, 4])
-                        with c_rc:
-                            do_recheck = st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary")
-                        with c_rm:
-                            do_remove = st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary")
-                        with c_nt:
-                            note_val = st.text_input("备注", value=notes, key=f"nt_{idx}",
-                                                     placeholder="例：已发邮件、回复快、要价高...",
-                                                     label_visibility="collapsed")
-
-                        # BD邮件（弹窗形式，正文一键复制）
-                        if st.button("📧 生成BD邮件", key=f"genmail_db_{idx}", use_container_width=True):
+                    with r6:
+                        _render_html(f'<div class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</div>')
+                    with r7:
+                        a_rc, a_rm, a_ml = st.columns([1, 1, 2.4])
+                        with a_rc:
+                            do_recheck = st.button("🔄", key=f"lrc_{idx}", help="复查活跃度", type="primary")
+                        with a_rm:
+                            do_remove = st.button("🗑", key=f"lrm_{idx}", help="从库中移除", type="primary")
+                        with a_ml:
+                            do_mail = st.button("📧 邮件", key=f"lmail_{idx}", use_container_width=True)
+                        if do_mail:
                             bd_email_dialog(rec)
 
-                        # 备注更新
-                        if note_val != notes:
-                            db = get_db()
-                            cid = rec.get("channel_id", "")
-                            if db:
-                                db.update_notes(cid, note_val)
-                            else:
-                                for lr in st.session_state.local_db:
-                                    if lr.get("channel_id") == cid:
-                                        lr["notes"] = note_val
+                    # 复查处理（整行宽度渲染，提示语不会竖排）
+                    if do_recheck:
+                        if st.session_state.api_key:
+                            with st.spinner("复查中..."):
+                                chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
+                                if chs:
+                                    ch_info = list(chs.values())[0]
+                                    result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
+                                    db = get_db()
+                                    cid = rec.get("channel_id", "")
+                                    if result:
+                                        result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
+                                        if db:
+                                            db.update_last_checked(cid, True, result)
+                                        st.success(f"✅ {name} 仍然活跃")
+                                    else:
+                                        if db:
+                                            db.update_last_checked(cid, False)
+                                        st.warning(f"⚠️ {name} 已不活跃")
+                        else:
+                            st.error("需要 API Key，请先在左侧填入后再复查")
 
-                        # 复查处理（整卡宽度渲染，提示语不会竖排）
-                        if do_recheck:
-                            if st.session_state.api_key:
-                                with st.spinner("复查中..."):
-                                    chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
-                                    if chs:
-                                        ch_info = list(chs.values())[0]
-                                        result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
-                                        db = get_db()
-                                        cid = rec.get("channel_id", "")
-                                        if result:
-                                            result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
-                                            if db:
-                                                db.update_last_checked(cid, True, result)
-                                            st.success(f"✅ {name} 仍然活跃")
-                                        else:
-                                            if db:
-                                                db.update_last_checked(cid, False)
-                                            st.warning(f"⚠️ {name} 已不活跃")
-                            else:
-                                st.error("需要 API Key，请先在左侧填入后再复查")
-
-                        # 删除处理
-                        if do_remove:
-                            db = get_db()
-                            cid = rec.get("channel_id", "")
-                            if db:
-                                db.remove(cid)
-                            else:
-                                st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                            st.rerun()
+                    # 删除处理
+                    if do_remove:
+                        db = get_db()
+                        cid = rec.get("channel_id", "")
+                        if db:
+                            db.remove(cid)
+                        else:
+                            st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                        st.rerun()
 
         # 导出
         st.markdown("---")
@@ -1483,6 +1633,8 @@ with tab_settings:
             # BD邮件身份在左侧身份栏维护，这里原样保留，避免保存评分设置时丢失
             "sender_name": st.session_state.config.get("sender_name", ""),
             "kkt_id": st.session_state.config.get("kkt_id", ""),
+            # 网红库显示模式（卡片/列表）也原样保留
+            "view_mode": st.session_state.config.get("view_mode", "card"),
         }
         # 持久化到数据库（下次打开还是你的设置）
         _db_save = get_db()
