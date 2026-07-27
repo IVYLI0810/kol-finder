@@ -492,6 +492,86 @@ def get_full_keyword_library() -> dict:
 
 
 # ============================================================
+# BD 邮件草稿生成（基于团队验证过的韩语话术模板，做个性化填充）
+# ============================================================
+
+# 中文垂类 → 韩语品类（用于邮件里"你的频道和XX品类很契合"这句）
+CATEGORY_KO = {
+    "家居收纳": "홈/인테리어",
+    "平价美妆": "뷰티",
+    "宿舍好物": "홈/인테리어",
+    "通勤配件": "패션",
+    "宠物用品": "리빙",
+    "学生用品": "문구",
+}
+
+
+def generate_email_draft(ch: dict, user_name: str, kkt_id: str) -> tuple[str, str]:
+    """
+    根据网红信息生成个性化韩语 BD 邮件草稿。
+    返回 (主题, 正文)。话术结构保留团队模板，仅做个性化填充。
+    """
+    name = ch.get("channel_name", "크리에이터")
+    category = ch.get("category", "")
+    cat_ko = CATEGORY_KO.get(category, "")
+    sender = user_name or "마케팅팀 담당자"
+    kkt = kkt_id or "（카카오톡 ID）"
+
+    # 品类契合句（有垂类才加，避免生硬）
+    cat_line = ""
+    if cat_ko:
+        cat_line = (f"\n특히 {name}님의 채널은 저희가 중점적으로 모집하고 있는 "
+                    f"{cat_ko} 카테고리와 톤앤매너가 매우 잘 맞아, "
+                    f"이번 프로모션에 최적의 파트너라고 판단했습니다.\n")
+
+    subject = f"[협업 제안] {name}님과 알리익스프레스 유튜브 쇼핑 제휴를 함께하고 싶습니다"
+
+    body = f"""안녕하세요, {name}님.
+알리익스프레스 마케팅팀 {sender}입니다.
+
+평소 {name}님의 유튜브 콘텐츠를 즐겁게 보고 있으며, 올리신 영상에서 보여준 센스와 시청자분들의 반응에 큰 관심을 가지게 되어 연락드렸습니다.
+
+저희 알리익스프레스가 현재 유튜브 쇼핑 태그를 활용한 크리에이터 제휴 프로모션을 진행하고 있는데, {name}님의 채널 톤앤매너와 매우 잘 어울릴 것 같아 협업 제안을 드리게 되었습니다.
+{cat_line}
+자유로운 형식의 영상 제작으로 안정적인 제작비와 추가 수익을 얻으실 수 있는 협업인 만큼, 아래 내용을 검토해 보시고 긍정적인 검토 부탁드립니다.
+
+[크리에이터가 하실 일] (매우 간단합니다!)
+저희는 크리에이터의 자유로운 스타일을 최대한 존중합니다.
+상품 선택 및 구매: 유튜브 쇼핑 스튜디오 내 태그 등록 가능한 알리익스프레스 상품(약 2,500만 개) 중 채널에 맞는 제품 자유롭게 선택
+영상 제작 및 업로드: 제품 언박싱, 리뷰, haul 등 자유로운 형식의 영상 제작
+유튜브 쇼핑 태그 등록: 영상 하단 또는 설명란에 해당 제품 태그 연결
+
+[크리에이터가 얻으실 혜택]
+1. 영상 제작비 지원 (상품 구매비 포함)
+채널 규모 및 콘텐츠 포맷에 맞춰 합리적인 수준의 제작비를 지원하며, 실제 상황에 따라 협의 가능합니다.
+2. 유튜브 쇼핑 태그 판매 수익 (판매 수수료 5~13% 지급)
+여성향 카테고리(뷰티, 패션, 홈 등)는 평균 10% 이상의 높은 수수료를 제공합니다.
+판매가 발생할 때마다 유튜브를 통해 직접 정산받으시므로, 한 번 올린 영상이 장기적인 파이프라인 수익이 됩니다.
+3. 인기 크리에이터 대상 '장기 파트너십' 체결
+단기 1회성이 아닌, 콘텐츠 성과가 좋을 경우 분기/연간 단위의 장기 계약을 통해 안정적이고 지속적인 수익을 보장해 드립니다.
+4. 단독 기획전(공동구매) 초대 및 전사적 마케팅 지원
+우수 파트너로 선정 시, 알리익스프레스 공식 단독 기획전 참여 기회 부여 (단독 할인코드 및 더 높은 수익률 보장)
+플랫폼 내/외부 미디어 자원을 활용한 채널 홍보 지원으로 신규 구독자 유입 및 채널 성장을 돕습니다.
+
+[진행 가능 카테고리 및 참고 영상]
+주요 카테고리: 뷰티 / 패션 / 홈 / 주방 / 육아 / 인테리어 / 문구 / 완구 / 네일 / 자동차 / 아웃도어 / 커피 등 카테고리
+참고 영상 (이런 형태로 제작해 주시면 됩니다):
+하봄: https://youtube.com/shorts/xIetj_6u_uo
+푸짐스: https://youtube.com/shorts/S3BT8PiziC0
+켈리아: https://www.youtube.com/shorts/W6bs2y-ab70
+
+협업에 관심이 있으시거나, 희망하시는 영상 제작 조건이 있으시면 편하게 회신 주시거나 아래 카카오톡으로 연락 부탁드립니다.
+(이메일보다 카카오톡으로 빠르게 안내해 드릴 수 있습니다.)
+카카오톡 ID: {kkt}
+
+크리에이터님과 함께 알리익스프레스가 성장할 수 있기를 기대하겠습니다.
+감사합니다.
+{sender} 드림"""
+
+    return subject, body
+
+
+# ============================================================
 # 侧边栏
 # ============================================================
 
@@ -856,7 +936,7 @@ with tab_search:
                 """)
 
                 # 操作按钮
-                col_a1, col_a2, col_a3 = st.columns([1, 1, 3])
+                col_a1, col_a2, col_a3 = st.columns([1, 1, 1.3])
                 with col_a1:
                     if st.button("✅ 加入网红库", key=f"add_{idx}", use_container_width=True):
                         db = get_db()
@@ -876,6 +956,22 @@ with tab_search:
                     if st.button("跳过", key=f"skip_{idx}", use_container_width=True):
                         st.session_state.search_results.remove(ch)
                         st.rerun()
+                with col_a3:
+                    _email_key = f"email_open_{ch['channel_id']}"
+                    if st.button("📧 生成BD邮件", key=f"genmail_{idx}", use_container_width=True):
+                        st.session_state[_email_key] = not st.session_state.get(_email_key, False)
+
+                # 邮件草稿（点"生成BD邮件"后展开，可编辑后复制）
+                if st.session_state.get(f"email_open_{ch['channel_id']}", False):
+                    _subj, _body = generate_email_draft(
+                        ch, st.session_state.user_name,
+                        st.session_state.config.get("kkt_id", ""),
+                    )
+                    st.markdown("")
+                    st.text_input("邮件主题（可改）", value=_subj, key=f"subj_{idx}")
+                    st.text_area("邮件正文（可改 · 全选复制后粘贴到阿里邮箱）",
+                                 value=_body, height=420, key=f"body_{idx}")
+                    st.caption("👆 已按团队 BD 模板自动生成并填入该博主信息，可直接微调措辞后复制发送")
                 st.markdown("")
 
             # 批量操作
@@ -1265,6 +1361,16 @@ with tab_settings:
     with col_d4:
         d_discover = st.number_input("新发现（天）", value=rules["discovered_days"], step=1)
 
+    # BD 邮件签名
+    st.markdown("")
+    st.markdown("#### 📧 BD邮件签名（生成邮件时用）")
+    kkt_id = st.text_input(
+        "你的卡考 Talk ID（카카오톡 ID）",
+        value=config.get("kkt_id", ""),
+        placeholder="例如：ivy_aliexpress",
+        help="生成的韩语 BD 邮件末尾会附上这个 ID，方便博主加你。每人各填各的，互不影响。",
+    )
+
     # 保存按钮
     st.markdown("")
     if st.button("💾 保存我的设置", use_container_width=True):
@@ -1281,6 +1387,7 @@ with tab_settings:
                 "onboarded_days": d_onboard, "rejected_days": d_reject,
                 "emailed_days": d_email, "discovered_days": d_discover,
             },
+            "kkt_id": kkt_id.strip(),
         }
         # 持久化到数据库（下次打开还是你的设置）
         _db_save = get_db()
