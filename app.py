@@ -722,15 +722,15 @@ with st.sidebar:
 
     _c_remember, _c_forget = st.columns([1, 1])
     with _c_remember:
-        if st.button("💾 记住", key="remember_key", use_container_width=True,
-                     help="只存在你自己电脑的浏览器里，不上传服务器，换台电脑要重填"):
+        if st.button("记住", key="remember_key", use_container_width=True,
+                     help="把 Key 存进你自己电脑的浏览器，刷新不用重填。不上传服务器。"):
             if api_key_input.strip():
                 _ls.setItem("yt_api_key", api_key_input.strip(), key="do_remember")
                 st.success("✅ 已记住，以后刷新自动填好")
             else:
                 st.warning("先粘贴 Key 再点记住哦")
     with _c_forget:
-        if st.button("🗑 忘掉", key="forget_key", use_container_width=True,
+        if st.button("忘掉", key="forget_key", use_container_width=True,
                      help="把这个浏览器里记住的 Key 清掉"):
             _ls.deleteItem("yt_api_key", key="do_forget")
             st.session_state.api_key = ""
