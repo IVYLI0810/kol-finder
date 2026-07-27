@@ -192,16 +192,17 @@ class InfluencerDB:
                         status: str = "已引入", imported_by: str = "") -> dict:
         """
         导入已有网红名单（通过频道ID或链接）
-        返回：{"success": int, "skipped": int, "failed": int}
+        返回：{"success": int, "skipped": int, "failed": int, "failed_lines": [str]}
         """
         from youtube_api import get_channels, resolve_channel_ids
 
-        result = {"success": 0, "skipped": 0, "failed": 0}
+        result = {"success": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
         # 先把混合格式（UC ID / @handle / 链接）统一解析成频道ID
-        # 无法识别的行（如视频链接）计入 failed，不再静默吞掉
+        # 无法识别的行（如视频链接）计入 failed 并记录原文，不再静默吞掉
         resolved_ids, unresolvable = resolve_channel_ids(channel_ids, api_key, quota)
-        result["failed"] += unresolvable
+        result["failed"] += len(unresolvable)
+        result["failed_lines"] = list(unresolvable)
 
         # 过滤已存在的
         new_ids = [cid for cid in resolved_ids if not self.exists(cid)]

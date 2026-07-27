@@ -1145,9 +1145,14 @@ UCxxxxxxxxxxxx""", language=None)
                         if result["failed"] > 0:
                             msg += "（失败 = 链接格式无法识别，或频道已不存在）"
                         st.success(msg)
+                        if result.get("failed_lines"):
+                            st.warning(
+                                "以下行导入失败，请检查后重试：\n\n"
+                                + "\n\n".join(f"· {line}" for line in result["failed_lines"])
+                            )
                     else:
                         # 本地模式
-                        resolved, bad = resolve_channel_ids(
+                        resolved, bad_lines = resolve_channel_ids(
                             lines, st.session_state.api_key, st.session_state.quota)
                         chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
                         added = 0
@@ -1158,7 +1163,12 @@ UCxxxxxxxxxxxx""", language=None)
                             info["notes"] = "批量导入"
                             st.session_state.local_db.append(info)
                             added += 1
-                        st.success(f"✅ 已导入 {added} 个频道（本地模式），无法识别 {bad} 行")
+                        st.success(f"✅ 已导入 {added} 个频道（本地模式），无法识别 {len(bad_lines)} 行")
+                        if bad_lines:
+                            st.warning(
+                                "以下行导入失败，请检查后重试：\n\n"
+                                + "\n\n".join(f"· {line}" for line in bad_lines)
+                            )
 
 
 # ============================================================
