@@ -59,26 +59,26 @@ st.markdown("""
     }
 
     /* ---------- 顶部 hero：黑圆标 + 黄投影标题（卡通像素风） ---------- */
-    .app-hero { text-align: center; padding: 8px 0 4px; position: relative; }
+    .app-hero { text-align: center; padding: 14px 0 6px; position: relative; }
     .app-hero .hero-logo {
-        width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 50%;
+        width: 96px; height: 96px; margin: 0 auto 18px; border-radius: 50%;
         background: #1c1c1e; color: #f5c542; display: flex; align-items: center; justify-content: center;
-        font-size: 26px; border: 4px solid #1c1c1e; box-shadow: 5px 5px 0 rgba(28,28,30,.3);
+        font-size: 40px; border: 5px solid #1c1c1e; box-shadow: 6px 6px 0 rgba(28,28,30,.3);
     }
     .app-hero .hero-title {
-        font-size: 30px; font-weight: 800; color: #1c1c1e; margin: 0 0 8px;
+        font-size: 44px; font-weight: 800; color: #1c1c1e; margin: 0 0 10px;
         font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
-        letter-spacing: 1px; text-shadow: 3px 3px 0 #f5c542;
+        letter-spacing: 1px; text-shadow: 4px 4px 0 #f5c542;
     }
-    .app-hero .hero-sub { font-size: 14px; color: #a05c74; font-weight: 700; margin: 0; }
+    .app-hero .hero-sub { font-size: 16px; color: #a05c74; font-weight: 700; margin: 0; }
     /* 星星：紫+黄 · 随机闪烁 */
-    .app-hero .hero-star { position: absolute; font-size: 20px; animation: twinkle 2.6s ease-in-out infinite; }
-    .app-hero .hero-star-l { left: 22%; top: 14px; color: #8674d6; animation-delay: 0s; animation-duration: 2.2s; }
-    .app-hero .hero-star-r { right: 22%; top: 14px; color: #f5c542; animation-delay: .8s; animation-duration: 3.1s; }
-    .app-hero .hero-star-2 { left: 30%; top: 66px; color: #f5c542; font-size: 14px; animation-delay: 1.4s; animation-duration: 2.7s; }
-    .app-hero .hero-star-3 { right: 30%; top: 70px; color: #8674d6; font-size: 15px; animation-delay: .4s; animation-duration: 3.4s; }
-    .app-hero .hero-star-4 { left: 16%; top: 52px; color: #8674d6; font-size: 13px; animation-delay: 1.9s; animation-duration: 2.4s; }
-    .app-hero .hero-star-5 { right: 15%; top: 48px; color: #f5c542; font-size: 12px; animation-delay: 1.1s; animation-duration: 2.9s; }
+    .app-hero .hero-star { position: absolute; font-size: 24px; animation: twinkle 2.6s ease-in-out infinite; }
+    .app-hero .hero-star-l { left: 20%; top: 20px; color: #8674d6; animation-delay: 0s; animation-duration: 2.2s; }
+    .app-hero .hero-star-r { right: 20%; top: 20px; color: #f5c542; animation-delay: .8s; animation-duration: 3.1s; }
+    .app-hero .hero-star-2 { left: 28%; top: 92px; color: #f5c542; font-size: 16px; animation-delay: 1.4s; animation-duration: 2.7s; }
+    .app-hero .hero-star-3 { right: 28%; top: 96px; color: #8674d6; font-size: 17px; animation-delay: .4s; animation-duration: 3.4s; }
+    .app-hero .hero-star-4 { left: 14%; top: 68px; color: #8674d6; font-size: 15px; animation-delay: 1.9s; animation-duration: 2.4s; }
+    .app-hero .hero-star-5 { right: 13%; top: 62px; color: #f5c542; font-size: 14px; animation-delay: 1.1s; animation-duration: 2.9s; }
     @keyframes twinkle {
         0%, 100% { opacity: .2; transform: scale(.75) rotate(-10deg); }
         50% { opacity: 1; transform: scale(1.2) rotate(10deg); }
