@@ -472,6 +472,35 @@ def _render_html(html_str: str):
 
 
 # ============================================================
+# 批量操作辅助函数
+# ============================================================
+
+def _init_batch_state():
+    """确保 batch_selected 集合存在"""
+    if "batch_selected" not in st.session_state:
+        st.session_state.batch_selected = set()
+
+
+def _on_batch_check(cid: str):
+    """单个勾选框变化时的回调（Streamlit on_change）"""
+    _init_batch_state()
+    if st.session_state.get(f"bchk_{cid}", False):
+        st.session_state.batch_selected.add(cid)
+    else:
+        st.session_state.batch_selected.discard(cid)
+
+
+def _clear_batch_selection():
+    """清空所有批量勾选状态"""
+    cids = list(st.session_state.get("batch_selected", set()))
+    st.session_state.batch_selected = set()
+    for cid in cids:
+        key = f"bchk_{cid}"
+        if key in st.session_state:
+            st.session_state[key] = False
+
+
+# ============================================================
 # Session State 初始化
 # ============================================================
 
@@ -1249,6 +1278,106 @@ with tab_database:
                 _db_vm.save_user_settings(st.session_state.user_name, st.session_state.config)
         st.markdown("")
 
+        # ---------- 批量操作工具条 ----------
+        _init_batch_state()
+        _batch_sel = st.session_state.batch_selected
+
+        col_sa, col_info, col_sp = st.columns([1.2, 2, 3])
+        with col_sa:
+            if st.button("☑ 全选当前", key="batch_select_all", use_container_width=True):
+                st.session_state.batch_selected = {r.get("channel_id", "") for r in filtered_db}
+                for r in filtered_db:
+                    st.session_state[f"bchk_{r.get('channel_id', '')}"] = True
+                st.rerun()
+        with col_info:
+            if _batch_sel:
+                st.markdown(f"已选 **{len(_batch_sel)}** 人")
+                if st.button("❎ 取消选择", key="batch_clear"):
+                    _clear_batch_selection()
+                    st.rerun()
+
+        # 选中后显示批量操作按钮
+        if _batch_sel:
+            st.markdown("")
+            bc1, bc2, bc3, bc4 = st.columns([2, 1.2, 1.2, 1.2])
+            with bc1:
+                batch_new_status = st.selectbox(
+                    "目标状态", ["已发邮件", "已引入", "已拒绝", "已淘汰", "新发现"],
+                    key="batch_status_select", label_visibility="collapsed",
+                )
+            with bc2:
+                do_batch_status = st.button("✏️ 批量改状态", key="batch_do_status", use_container_width=True)
+            with bc3:
+                do_batch_delete = st.button("🗑 批量删除", key="batch_do_delete", use_container_width=True, type="primary")
+            with bc4:
+                do_batch_export = st.button("📥 导出选中", key="batch_do_export", use_container_width=True)
+
+            # 批量改状态
+            if do_batch_status:
+                db = get_db()
+                cids = list(_batch_sel)
+                if db:
+                    n = db.batch_update_status(cids, batch_new_status)
+                    st.success(f"✅ 已将 {n} 人状态改为「{batch_new_status}」")
+                else:
+                    for lr in st.session_state.local_db:
+                        if lr.get("channel_id") in _batch_sel:
+                            lr["status"] = batch_new_status
+                            lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    st.success(f"✅ 已将 {len(cids)} 人状态改为「{batch_new_status}」（本地模式）")
+                _clear_batch_selection()
+                st.rerun()
+
+            # 批量删除（二次确认）
+            if do_batch_delete:
+                st.session_state["_batch_delete_confirm"] = True
+            if st.session_state.get("_batch_delete_confirm"):
+                st.warning(f"⚠️ 确定要删除选中的 {len(_batch_sel)} 人吗？此操作不可恢复！")
+                dc1, dc2, _ = st.columns([1, 1, 4])
+                with dc1:
+                    if st.button("确定删除", key="batch_confirm_del", type="primary"):
+                        db = get_db()
+                        cids = list(_batch_sel)
+                        if db:
+                            n = db.batch_remove(cids)
+                            st.success(f"🗑 已删除 {n} 人")
+                        else:
+                            st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") not in _batch_sel]
+                            st.success(f"🗑 已删除 {len(cids)} 人（本地模式）")
+                        _clear_batch_selection()
+                        st.session_state.pop("_batch_delete_confirm", None)
+                        st.rerun()
+                with dc2:
+                    if st.button("取消", key="batch_cancel_del"):
+                        st.session_state.pop("_batch_delete_confirm", None)
+                        st.rerun()
+
+            # 导出选中
+            if do_batch_export:
+                sel_rows = []
+                for r in records:
+                    if r.get("channel_id") in _batch_sel:
+                        sel_rows.append({
+                            "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
+                            "垂类": r.get("category", ""), "订阅量": r.get("subscribers", 0),
+                            "评分": r.get("score_total", ""), "状态": r.get("status", ""),
+                            "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
+                            "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
+                        })
+                if sel_rows:
+                    buf = BytesIO()
+                    pd.DataFrame(sel_rows).to_excel(buf, index=False, engine="openpyxl")
+                    st.download_button(
+                        "⬇️ 点击下载选中网红 Excel", data=buf.getvalue(),
+                        file_name=f"网红库_选中{len(sel_rows)}人_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="batch_download_btn",
+                    )
+                else:
+                    st.info("选中的网红不在当前记录中（可能已被删除）")
+
+            st.markdown("---")
+
         total_db = len(filtered_db)
 
         if view_mode == "card":
@@ -1265,6 +1394,11 @@ with tab_database:
                         with st.container():
                             # 隐藏标记：让外层容器变成卡片（见CSS :has()规则）
                             st.markdown('<div class="kol-card-marker"></div>', unsafe_allow_html=True)
+
+                            # 批量勾选框
+                            _cid = rec.get("channel_id", "")
+                            st.checkbox("选", key=f"bchk_{_cid}", on_change=_on_batch_check, args=(_cid,),
+                                        help="勾选后可批量操作")
 
                             status = rec.get("status", "新发现")
                             status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
@@ -1388,8 +1522,12 @@ with tab_database:
                     discoverer = rec.get("discovered_by", "")
                     email = rec.get("emails", "")
 
-                    # 一行七列：频道/邮箱 · 垂类 · 订阅 · 评分 · 状态 · 挖掘人 · 操作
-                    r1, r2, r3, r4, r5, r6, r7 = st.columns([2.4, 1, 0.9, 0.7, 1.2, 0.9, 1.9])
+                    # 一行八列：勾选 · 频道/邮箱 · 垂类 · 订阅 · 评分 · 状态 · 挖掘人 · 操作
+                    _cid = rec.get("channel_id", "")
+                    r0, r1, r2, r3, r4, r5, r6, r7 = st.columns([0.4, 2.4, 1, 0.9, 0.7, 1.2, 0.9, 1.9])
+                    with r0:
+                        st.checkbox("选", key=f"bchk_{_cid}", on_change=_on_batch_check, args=(_cid,),
+                                    label_visibility="collapsed", help="勾选后可批量操作")
                     with r1:
                         _render_html(
                             f'<span class="row-name"><a href="{url}" target="_blank">{_safe(name)}</a></span><br>'

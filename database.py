@@ -263,6 +263,40 @@ class InfluencerDB:
         except Exception:
             return False
 
+    def batch_update_status(self, channel_ids: list[str], new_status: str) -> int:
+        """批量更新状态，返回成功更新的数量"""
+        if not channel_ids:
+            return 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        update_data = {"status": new_status, "status_date": now}
+        if new_status == "已发邮件":
+            update_data["email_sent_date"] = now
+        try:
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update(update_data)
+                .in_("channel_id", channel_ids)
+                .execute()
+            )
+            return len(result.data or [])
+        except Exception:
+            return 0
+
+    def batch_remove(self, channel_ids: list[str]) -> int:
+        """批量删除，返回成功删除的数量"""
+        if not channel_ids:
+            return 0
+        try:
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .delete()
+                .in_("channel_id", channel_ids)
+                .execute()
+            )
+            return len(result.data or [])
+        except Exception:
+            return 0
+
     # ============================================================
     # 成员名单
     # ============================================================
