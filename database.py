@@ -63,6 +63,112 @@ class InfluencerDB:
         except Exception:
             return []
 
+    # ============================================================
+    # 分页查询（免费版下减少单次传输量和内存占用）
+    # ============================================================
+
+    # 列表页只需要这些轻量字段，不要 thumbnails / recent_titles 等大字段
+    LIGHT_FIELDS = (
+        "channel_id,channel_name,channel_url,category,subscribers,"
+        "score_total,status,discovered_by,emails,notes,added_date,"
+        "status_date,last_upload,last_checked,email_sent_date,introduced_date"
+    )
+    # 兼容尚未添加 introduced_date 列的库（首次升级时）
+    LIGHT_FIELDS_FALLBACK = LIGHT_FIELDS.replace(",introduced_date", "")
+
+    SORT_COLUMNS = {
+        "添加时间": "added_date",
+        "评分": "score_total",
+        "订阅量": "subscribers",
+        "最近更新": "last_upload",
+    }
+
+    # 搜索去重只需要这几个字段，避免搜索时全量拉取大表
+    DEDUP_FIELDS = "channel_id,status,status_date,added_date"
+
+    def get_dedup_records(self) -> list[dict]:
+        """获取用于搜索去重的轻量记录（不含 thumbnails 等大字段）"""
+        try:
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .select(self.DEDUP_FIELDS)
+                .execute()
+            )
+            return result.data or []
+        except Exception:
+            return []
+
+    def count_records(self, status: str = None, category: list[str] = None,
+                      discoverer: str = None, discoverer_name: str = "") -> int:
+        """按当前筛选条件计数（用于分页）"""
+        try:
+            query = self.client.table(self.TABLE_NAME).select("*", count="exact")
+            if status and status != "全部":
+                query = query.eq("status", status)
+            if category:
+                query = query.in_("category", category)
+            if discoverer and discoverer != "全部":
+                if discoverer == "只看我的":
+                    query = query.eq("discovered_by", discoverer_name)
+                else:
+                    query = query.eq("discovered_by", discoverer)
+            result = query.execute()
+            return result.count or 0
+        except Exception:
+            return 0
+
+    def _build_paginated_query(self, fields: str, page: int, page_size: int,
+                               status: str, category: list[str],
+                               discoverer: str, discoverer_name: str,
+                               sort_by: str, descending: bool):
+        """构建设分页查询（不执行）。"""
+        query = self.client.table(self.TABLE_NAME).select(fields)
+
+        if status and status != "全部":
+            query = query.eq("status", status)
+        if category:
+            query = query.in_("category", category)
+        if discoverer and discoverer != "全部":
+            if discoverer == "只看我的":
+                query = query.eq("discovered_by", discoverer_name)
+            else:
+                query = query.eq("discovered_by", discoverer)
+
+        sort_col = self.SORT_COLUMNS.get(sort_by, "added_date")
+        query = query.order(sort_col, desc=descending)
+
+        start = (page - 1) * page_size
+        end = start + page_size - 1
+        return query.range(start, end)
+
+    def get_records_paginated(self, page: int = 1, page_size: int = 30,
+                              status: str = None, category: list[str] = None,
+                              discoverer: str = None, discoverer_name: str = "",
+                              sort_by: str = "添加时间", descending: bool = True) -> list[dict]:
+        """
+        分页获取网红记录，筛选和排序都在 Supabase 服务端完成。
+        只返回列表页需要的轻量字段，减少网络传输和内存占用。
+        """
+        try:
+            query = self._build_paginated_query(
+                self.LIGHT_FIELDS, page, page_size, status, category,
+                discoverer, discoverer_name, sort_by, descending,
+            )
+            result = query.execute()
+            return result.data or []
+        except Exception:
+            # 首次升级时 introduced_date 列可能还不存在，先回退到基础字段，
+            # 保证旧数据能正常显示；等新列加好后会自动显示完整日期。
+            try:
+                query = self._build_paginated_query(
+                    self.LIGHT_FIELDS_FALLBACK, page, page_size, status, category,
+                    discoverer, discoverer_name, sort_by, descending,
+                )
+                result = query.execute()
+                return result.data or []
+            except Exception:
+                return []
+
     def get_channel_ids(self) -> set[str]:
         """获取库中所有频道ID（用于去重）"""
         try:
@@ -116,6 +222,7 @@ class InfluencerDB:
             "status_date": now,
             "discovered_by": discovered_by,
             "email_sent_date": None,
+            "introduced_date": None,
             "notes": "",
             "added_date": now,
             "last_checked": now,
@@ -150,6 +257,9 @@ class InfluencerDB:
         # 如果标记为"已发邮件"，记录发送日期
         if new_status == "已发邮件":
             update_data["email_sent_date"] = now
+        # 如果标记为"已引入"，记录引入日期
+        if new_status == "已引入":
+            update_data["introduced_date"] = now
 
         try:
             self.client.table(self.TABLE_NAME).update(update_data).eq("channel_id", channel_id).execute()
@@ -238,7 +348,8 @@ class InfluencerDB:
                 "status": status,
                 "status_date": now,
                 "discovered_by": imported_by,
-                "email_sent_date": None,
+                "email_sent_date": now if status == "已引入" else None,
+                "introduced_date": now if status == "已引入" else None,
                 "notes": "批量导入（已有合作）",
                 "added_date": now,
                 "last_checked": now,
@@ -271,6 +382,8 @@ class InfluencerDB:
         update_data = {"status": new_status, "status_date": now}
         if new_status == "已发邮件":
             update_data["email_sent_date"] = now
+        if new_status == "已引入":
+            update_data["introduced_date"] = now
         try:
             result = (
                 self.client.table(self.TABLE_NAME)

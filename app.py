@@ -167,6 +167,10 @@ st.markdown("""
     .status-emailed { background: #f5c542; color: #1c1c1e; }
     .status-onboard { background: #7fd8a4; color: #1c1c1e; }
     .status-reject { background: #ffd9e3; color: #1c1c1e; }
+    .status-date {
+        font-size: 10.5px; color: #a05c74; font-weight: 700;
+        margin-top: 4px; line-height: 1.2;
+    }
 
     /* ---------- 网红库三列小卡片：把 Streamlit 容器变成卡片 ----------
        原理：卡片容器内第一个元素是隐藏的 .kol-card-marker，
@@ -471,6 +475,79 @@ def _render_html(html_str: str):
     st.markdown("\n".join(lines), unsafe_allow_html=True)
 
 
+def _status_date_html(status: str, email_sent_date, introduced_date) -> str:
+    """根据状态返回小字日期 HTML（用于已发邮件 / 已引入下方）。"""
+    date_str = ""
+    if status == "已发邮件" and email_sent_date:
+        date_str = f"📧 {str(email_sent_date)[:10]}"
+    elif status == "已引入" and introduced_date:
+        date_str = f"🤝 {str(introduced_date)[:10]}"
+    if date_str:
+        return f'<div class="status-date">{date_str}</div>'
+    return ""
+
+
+def _apply_status_date(record: dict, new_status: str):
+    """本地模式下，根据新状态补录发邮件/引入时间。"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    record["status"] = new_status
+    record["status_date"] = now
+    if new_status == "已发邮件":
+        record["email_sent_date"] = now
+    if new_status == "已引入":
+        record["introduced_date"] = now
+
+
+def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owner: str = "") -> tuple[bool, str]:
+    """刷新单个网红的基础数据（订阅/均播/评分/最近更新）。
+
+    返回 (成功?, 提示消息)。成功时会更新数据库并清空相关缓存。
+    只有该网红的挖掘人（discovered_by）与当前登录用户一致时才允许刷新。
+    """
+    user_name = st.session_state.get("user_name", "")
+    if owner and owner != user_name:
+        return False, f"只能刷新自己挖掘的网红（{channel_name} 由 {owner} 负责）"
+
+    if not st.session_state.get("api_key"):
+        return False, "需要 API Key，请先在左侧填入后再刷新"
+
+    with st.spinner(f"刷新 {channel_name} 中..."):
+        chs = get_channels([channel_id], st.session_state.api_key, st.session_state.quota)
+        if not chs:
+            return False, f"⚠️ {channel_name}：无法获取频道信息"
+
+        ch_info = list(chs.values())[0]
+        result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
+        _db = get_db()
+
+        if result:
+            result["scores"] = score_channel(result, category, st.session_state.config)
+            if _db:
+                _db.update_last_checked(channel_id, True, result)
+            else:
+                # 本地模式：直接更新内存里的测试数据
+                for lr in st.session_state.local_db:
+                    if lr.get("channel_id") == channel_id:
+                        lr["subscribers"] = result.get("subscribers", lr.get("subscribers", 0))
+                        lr["avg_views_30d"] = result.get("avg_views_30d", lr.get("avg_views_30d", 0))
+                        lr["view_sub_ratio"] = result.get("view_sub_ratio", lr.get("view_sub_ratio", 0))
+                        lr["last_upload"] = result.get("last_upload", lr.get("last_upload", ""))
+                        lr["score_total"] = result["scores"].get("total", lr.get("score_total", 0))
+                        lr["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        break
+            _count_records.clear()
+            _get_paginated_records.clear()
+            _get_dedup_records.clear()
+            return True, f"✅ {channel_name}：数据已刷新"
+        else:
+            if _db:
+                _db.update_last_checked(channel_id, False)
+            _count_records.clear()
+            _get_paginated_records.clear()
+            _get_dedup_records.clear()
+            return True, f"⚠️ {channel_name}：已标记为不活跃"
+
+
 # ============================================================
 # 批量操作辅助函数
 # ============================================================
@@ -524,7 +601,44 @@ if "user_name" not in st.session_state:
     st.session_state.user_name = ""
 # 本地模式备用数据
 if "local_db" not in st.session_state:
-    st.session_state.local_db = []
+    st.session_state.local_db = [
+        {
+            "channel_id": "test_email_001",
+            "channel_name": "测试频道-已发邮件",
+            "channel_url": "https://www.youtube.com/@testemail",
+            "category": "平价美妆",
+            "subscribers": 12000,
+            "score_total": 82,
+            "status": "已发邮件",
+            "discovered_by": "测试员",
+            "emails": "test@example.com",
+            "notes": "本地测试数据",
+            "added_date": "2026-08-01 10:00",
+            "status_date": "2026-08-05 14:30",
+            "last_upload": "2026-08-04",
+            "last_checked": "2026-08-05 14:30",
+            "email_sent_date": "2026-08-05",
+            "introduced_date": None,
+        },
+        {
+            "channel_id": "test_onboard_002",
+            "channel_name": "测试频道-已引入",
+            "channel_url": "https://www.youtube.com/@testonboard",
+            "category": "家居收纳",
+            "subscribers": 8500,
+            "score_total": 78,
+            "status": "已引入",
+            "discovered_by": "测试员",
+            "emails": "onboard@example.com",
+            "notes": "本地测试数据",
+            "added_date": "2026-08-02 09:00",
+            "status_date": "2026-08-06 11:00",
+            "last_upload": "2026-08-03",
+            "last_checked": "2026-08-06 11:00",
+            "email_sent_date": "2026-08-05",
+            "introduced_date": "2026-08-06",
+        },
+    ]
 
 
 # ============================================================
@@ -557,6 +671,38 @@ def get_all_records() -> list[dict]:
     return st.session_state.local_db
 
 
+@st.cache_data(ttl=45, show_spinner=False)
+def _count_records(db_url, db_key, status, category_tuple, discoverer, discoverer_name):
+    """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）"""
+    from database import InfluencerDB
+    db = InfluencerDB(db_url, db_key)
+    return db.count_records(
+        status=status,
+        category=list(category_tuple) if category_tuple else None,
+        discoverer=discoverer,
+        discoverer_name=discoverer_name,
+    )
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
+                           discoverer, discoverer_name, sort_by, descending):
+    """带缓存的分页查询（内部临时创建 DB 连接）"""
+    from database import InfluencerDB
+    db = InfluencerDB(db_url, db_key)
+    return db.get_records_paginated(
+        page=page,
+        page_size=page_size,
+        status=status,
+        category=list(category_tuple) if category_tuple else None,
+        discoverer=discoverer,
+        discoverer_name=discoverer_name,
+        sort_by=sort_by,
+        descending=descending,
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def get_full_keyword_library() -> dict:
     """
     获取完整关键词库（全队共享版）。
@@ -573,6 +719,14 @@ def get_full_keyword_library() -> dict:
         db.seed_keywords(KEYWORD_LIBRARY)
         return KEYWORD_LIBRARY
     return KEYWORD_LIBRARY
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _get_dedup_records(db_url, db_key):
+    """带缓存的去重轻量记录查询（搜索页用，避免全表拉取）"""
+    from database import InfluencerDB
+    db = InfluencerDB(db_url, db_key)
+    return db.get_dedup_records()
 
 
 # ============================================================
@@ -865,8 +1019,8 @@ if st.session_state.user_name:
                 # BD邮件身份（署名 + 卡考Talk ID）也从个人档案恢复
                 _merged["sender_name"] = _personal.get("sender_name", "")
                 _merged["kkt_id"] = _personal.get("kkt_id", "")
-                # 网红库显示模式（卡片/列表）也从个人档案恢复
-                _merged["view_mode"] = _personal.get("view_mode", "card")
+                # 网红库显示模式（卡片/列表）也从个人档案恢复，默认列表
+                _merged["view_mode"] = _personal.get("view_mode", "list")
                 st.session_state.config = _merged
         st.session_state._settings_loaded_for = st.session_state.user_name
         # 加载完刷新一次，让侧边栏"BD邮件身份"立刻显示当前身份的值
@@ -958,8 +1112,14 @@ with tab_search:
 
         st.markdown("")
 
-        # 获取库中记录用于去重
-        db_records = get_all_records()
+        # 获取库中记录用于去重（只拉去重必需的轻量字段，避免全表传输）
+        db = get_db()
+        if db:
+            db_records = _get_dedup_records(
+                st.session_state.supabase_url, st.session_state.supabase_key
+            )
+        else:
+            db_records = st.session_state.local_db
 
         # 搜索触发：优先用点击的推荐词，其次用自定义输入
         search_keyword = None
@@ -985,6 +1145,7 @@ with tab_search:
                     "keyword": search_keyword, "category": category_select,
                     "time": datetime.now().strftime("%H:%M"), "results": len(results),
                 })
+                st.session_state.search_log = st.session_state.search_log[-10:]
                 if results:
                     st.success(f"✅ 找到 {len(results)} 个符合条件的活跃博主")
                 else:
@@ -1065,8 +1226,8 @@ with tab_search:
                 thumb_html = ""
                 if thumbnails:
                     items = ""
-                    for t in thumbnails[:4]:
-                        items += f'<div class="thumb-item"><img src="{t["url"]}" alt=""><span>{t["date"]}</span></div>'
+                    for t in thumbnails[:2]:
+                        items += f'<div class="thumb-item"><img src="{t["url"]}" alt="" loading="lazy" decoding="async"><span>{t["date"]}</span></div>'
                     thumb_html = f'<div class="thumb-row">{items}</div>'
 
                 # 商业化标记
@@ -1124,6 +1285,9 @@ with tab_search:
                         if db:
                             if db.add_influencer(ch, st.session_state.user_name):
                                 st.success(f"已添加「{ch['channel_name']}」")
+                                _count_records.clear()
+                                _get_paginated_records.clear()
+                                _get_dedup_records.clear()
                             else:
                                 st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
                         else:
@@ -1132,6 +1296,7 @@ with tab_search:
                             ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             ch["discovered_by"] = st.session_state.user_name
                             st.session_state.local_db.append(ch)
+                            _get_dedup_records.clear()
                             st.success(f"已添加「{ch['channel_name']}」（本地模式）")
                 with col_a2:
                     if st.button("跳过", key=f"skip_{idx}", use_container_width=True):
@@ -1200,63 +1365,158 @@ with tab_database:
     st.markdown("### 网红库")
     st.markdown("")
 
-    records = get_all_records()
+    db = get_db()
+    user_name = st.session_state.user_name or ""
 
-    if not records:
+    # 初始化筛选/分页状态
+    _db_defaults = {
+        "filter_status": "全部",
+        "filter_cat": [],
+        "filter_discoverer": "全部",
+        "db_sort": "添加时间",
+        "db_page": 1,
+        "db_page_size": 30,
+    }
+    for k, v in _db_defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+    # view_mode 优先用个人配置，默认列表模式
+    if "view_mode" not in st.session_state:
+        st.session_state.view_mode = st.session_state.config.get("view_mode", "list")
+
+    def _reset_db_page():
+        st.session_state.db_page = 1
+
+    def _save_note(cid: str):
+        """备注框 on_change 回调：只在失焦/回车时保存"""
+        val = st.session_state.get(f"nt_{cid}", "")
+        _db = get_db()
+        if _db:
+            _db.update_notes(cid, val)
+        else:
+            for lr in st.session_state.local_db:
+                if lr.get("channel_id") == cid:
+                    lr["notes"] = val
+        _count_records.clear()
+        _get_paginated_records.clear()
+        _get_dedup_records.clear()
+
+    # 挖掘人选项（用成员表，避免全量扫 influencers）
+    if db:
+        discoverer_options = ["全部", "只看我的"] + db.get_members()
+    else:
+        discoverer_options = ["全部", "只看我的"] + sorted({
+            r.get("discovered_by", "") for r in st.session_state.local_db if r.get("discovered_by")
+        })
+
+    # 统计（按状态计数，不走全量拉取）
+    if db:
+        total_count = _count_records(
+            st.session_state.supabase_url, st.session_state.supabase_key,
+            "全部", tuple(), "全部", "",
+        )
+        status_counts = {}
+        for s in ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]:
+            status_counts[s] = _count_records(
+                st.session_state.supabase_url, st.session_state.supabase_key,
+                s, tuple(), "全部", "",
+            )
+    else:
+        all_local = st.session_state.local_db
+        total_count = len(all_local)
+        status_counts = {s: 0 for s in ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]}
+        for r in all_local:
+            s = r.get("status", "")
+            if s in status_counts:
+                status_counts[s] += 1
+
+    if total_count == 0:
         st.info("网红库为空。搜索后点击「加入网红库」，或使用「📥 批量导入」添加已有合作博主。")
     else:
-        # 统计
-        stats = {"total": len(records), "新发现": 0, "已发邮件": 0, "已引入": 0, "已拒绝": 0, "已淘汰": 0}
-        for r in records:
-            s = r.get("status", "")
-            if s in stats:
-                stats[s] += 1
-
         cols = st.columns(6)
         labels = ["总数", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
         keys = ["total", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
-        for col, label, key in zip(cols, labels, keys):
+        values = [total_count] + [status_counts[k] for k in keys[1:]]
+        for col, label, val in zip(cols, labels, values):
             with col:
-                st.metric(label, stats[key])
+                st.metric(label, val)
 
         st.markdown("")
 
         # 筛选
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
-            filter_status = st.selectbox("状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"])
+            st.selectbox(
+                "状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
+                key="filter_status", on_change=_reset_db_page,
+            )
         with col_f2:
-            filter_cat = st.multiselect("垂类", options=list(KW_LIB.keys()), default=[], placeholder="全部垂类")
+            st.multiselect(
+                "垂类", options=list(KW_LIB.keys()), default=[], placeholder="全部垂类",
+                key="filter_cat", on_change=_reset_db_page,
+            )
         with col_f3:
-            # 挖掘人筛选：全部 / 只看我的 / 各个挖过博主的同事名字（自动从记录收集）
-            discoverers = sorted({r.get("discovered_by", "") for r in records if r.get("discovered_by")})
-            filter_discoverer = st.selectbox(
-                "👤 挖掘人", ["全部", "只看我的"] + discoverers,
+            st.selectbox(
+                "👤 挖掘人", discoverer_options,
                 help="「只看我的」= 只显示你挖的博主；也可以选同事名字看 TA 挖了谁",
+                key="filter_discoverer", on_change=_reset_db_page,
             )
         with col_f4:
-            db_sort = st.selectbox("排序", ["添加时间", "评分", "订阅量", "最近更新"], key="db_sort")
+            st.selectbox(
+                "排序", ["添加时间", "评分", "订阅量", "最近更新"],
+                key="db_sort", on_change=_reset_db_page,
+            )
 
-        filtered_db = records
-        if filter_status != "全部":
-            filtered_db = [r for r in filtered_db if r.get("status") == filter_status]
-        if filter_cat:
-            filtered_db = [r for r in filtered_db if r.get("category") in filter_cat]
-        if filter_discoverer == "只看我的":
-            filtered_db = [r for r in filtered_db if r.get("discovered_by") == st.session_state.user_name]
-        elif filter_discoverer != "全部":
-            filtered_db = [r for r in filtered_db if r.get("discovered_by") == filter_discoverer]
+        # 当前筛选条件
+        status = st.session_state.filter_status
+        category = tuple(st.session_state.filter_cat) if st.session_state.filter_cat else tuple()
+        discoverer = st.session_state.filter_discoverer
+        sort_by = st.session_state.db_sort
+        page_size = st.session_state.db_page_size
+        page = st.session_state.db_page
 
-        sort_map = {
-            "添加时间": lambda x: x.get("added_date", ""),
-            "评分": lambda x: x.get("score_total", 0) if isinstance(x.get("score_total"), (int, float)) else 0,
-            "订阅量": lambda x: x.get("subscribers", 0),
-            "最近更新": lambda x: x.get("last_upload", ""),
-        }
-        filtered_db.sort(key=sort_map[db_sort], reverse=True)
+        # 获取分页记录
+        if db:
+            filtered_count = _count_records(
+                st.session_state.supabase_url, st.session_state.supabase_key,
+                status, category, discoverer, user_name,
+            )
+            total_pages = max(1, (filtered_count + page_size - 1) // page_size)
+            if page > total_pages:
+                st.session_state.db_page = total_pages
+            page = max(1, min(page, total_pages))
+            records_page = _get_paginated_records(
+                st.session_state.supabase_url, st.session_state.supabase_key,
+                page, page_size, status, category, discoverer, user_name, sort_by, True,
+            )
+        else:
+            sort_map = {
+                "添加时间": lambda x: x.get("added_date", ""),
+                "评分": lambda x: x.get("score_total", 0) if isinstance(x.get("score_total"), (int, float)) else 0,
+                "订阅量": lambda x: x.get("subscribers", 0),
+                "最近更新": lambda x: x.get("last_upload", ""),
+            }
+            local = st.session_state.local_db[:]
+            if status != "全部":
+                local = [r for r in local if r.get("status") == status]
+            if st.session_state.filter_cat:
+                local = [r for r in local if r.get("category") in st.session_state.filter_cat]
+            if discoverer == "只看我的":
+                local = [r for r in local if r.get("discovered_by") == user_name]
+            elif discoverer != "全部":
+                local = [r for r in local if r.get("discovered_by") == discoverer]
+            local.sort(key=sort_map[sort_by], reverse=True)
+            filtered_count = len(local)
+            total_pages = max(1, (filtered_count + page_size - 1) // page_size)
+            if page > total_pages:
+                st.session_state.db_page = total_pages
+            page = max(1, min(page, total_pages))
+            start = (page - 1) * page_size
+            records_page = local[start:start + page_size]
 
-        # 工具条：显示模式切换（左）+ 计数（右）
-        _vm_saved = st.session_state.config.get("view_mode", "card")
+        # 显示模式切换
+        _vm_saved = st.session_state.view_mode
         col_vm, col_cnt = st.columns([4, 2])
         with col_vm:
             view_mode_label = st.radio(
@@ -1268,15 +1528,36 @@ with tab_database:
                 help="卡片模式适合逐个看详情；列表模式适合快速扫全库、批量改状态",
             )
         with col_cnt:
-            st.markdown(f"显示 {len(filtered_db)} / {len(records)} 条")
+            st.markdown(f"显示 {filtered_count} / {total_count} 条 · 第 {page} / {total_pages} 页")
         view_mode = "card" if view_mode_label == "🗂 卡片模式" else "list"
-        # 记住选择（存进个人档案，下次打开自动恢复）
         if view_mode != _vm_saved:
+            st.session_state.view_mode = view_mode
             st.session_state.config["view_mode"] = view_mode
             _db_vm = get_db()
-            if _db_vm and st.session_state.user_name:
-                _db_vm.save_user_settings(st.session_state.user_name, st.session_state.config)
+            if _db_vm and user_name:
+                _db_vm.save_user_settings(user_name, st.session_state.config)
         st.markdown("")
+
+        # 分页控件
+        p_col1, p_col2, p_col3, p_col4 = st.columns([1, 1, 2, 1])
+        with p_col1:
+            def _prev_page():
+                st.session_state.db_page = max(1, st.session_state.db_page - 1)
+            st.button("◀ 上一页", disabled=(page <= 1), on_click=_prev_page, key="db_prev_page", use_container_width=True)
+        with p_col2:
+            def _next_page():
+                st.session_state.db_page = min(total_pages, st.session_state.db_page + 1)
+            st.button("下一页 ▶", disabled=(page >= total_pages), on_click=_next_page, key="db_next_page", use_container_width=True)
+        with p_col3:
+            st.markdown(
+                f"<div style='text-align:center; padding-top:8px; font-weight:700;'>第 {page} / {total_pages} 页</div>",
+                unsafe_allow_html=True,
+            )
+        with p_col4:
+            st.selectbox(
+                "每页条数", [20, 30, 50],
+                key="db_page_size", on_change=_reset_db_page, label_visibility="collapsed",
+            )
 
         # ---------- 批量操作工具条 ----------
         _init_batch_state()
@@ -1284,10 +1565,12 @@ with tab_database:
 
         col_sa, col_info, col_sp = st.columns([1.2, 2, 3])
         with col_sa:
-            if st.button("☑ 全选当前", key="batch_select_all", use_container_width=True):
-                st.session_state.batch_selected = {r.get("channel_id", "") for r in filtered_db}
-                for r in filtered_db:
-                    st.session_state[f"bchk_{r.get('channel_id', '')}"] = True
+            if st.button("☑ 全选当前页", key="batch_select_all", use_container_width=True):
+                for r in records_page:
+                    cid = r.get("channel_id", "")
+                    if cid:
+                        st.session_state.batch_selected.add(cid)
+                        st.session_state[f"bchk_{cid}"] = True
                 st.rerun()
         with col_info:
             if _batch_sel:
@@ -1299,7 +1582,7 @@ with tab_database:
         # 选中后显示批量操作按钮
         if _batch_sel:
             st.markdown("")
-            bc1, bc2, bc3, bc4 = st.columns([2, 1.2, 1.2, 1.2])
+            bc1, bc2, bc3, bc4, bc5 = st.columns([2, 1.4, 1.4, 1.4, 1.4])
             with bc1:
                 batch_new_status = st.selectbox(
                     "目标状态", ["已发邮件", "已引入", "已拒绝", "已淘汰", "新发现"],
@@ -1308,25 +1591,74 @@ with tab_database:
             with bc2:
                 do_batch_status = st.button("✏️ 批量改状态", key="batch_do_status", use_container_width=True)
             with bc3:
-                do_batch_delete = st.button("🗑 批量删除", key="batch_do_delete", use_container_width=True, type="primary")
+                do_batch_refresh = st.button("🔄 刷新选中", key="batch_do_refresh", use_container_width=True)
             with bc4:
+                do_batch_delete = st.button("🗑 批量删除", key="batch_do_delete", use_container_width=True, type="primary")
+            with bc5:
                 do_batch_export = st.button("📥 导出选中", key="batch_do_export", use_container_width=True)
 
             # 批量改状态
             if do_batch_status:
-                db = get_db()
+                _db_b = get_db()
                 cids = list(_batch_sel)
-                if db:
-                    n = db.batch_update_status(cids, batch_new_status)
-                    st.success(f"✅ 已将 {n} 人状态改为「{batch_new_status}」")
+                if _db_b:
+                    n = _db_b.batch_update_status(cids, batch_new_status)
                 else:
                     for lr in st.session_state.local_db:
                         if lr.get("channel_id") in _batch_sel:
-                            lr["status"] = batch_new_status
-                            lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    st.success(f"✅ 已将 {len(cids)} 人状态改为「{batch_new_status}」（本地模式）")
+                            _apply_status_date(lr, batch_new_status)
+                    n = len(cids)
+                _count_records.clear()
+                _get_paginated_records.clear()
+                _get_dedup_records.clear()
                 _clear_batch_selection()
+                st.success(f"✅ 已将 {n} 人状态改为「{batch_new_status}」")
                 st.rerun()
+
+            # 批量刷新数据（只能刷新自己挖掘的）
+            if do_batch_refresh:
+                if not st.session_state.get("api_key"):
+                    st.error("需要 API Key，请先在左侧填入后再刷新")
+                else:
+                    user_name = st.session_state.get("user_name", "")
+                    all_recs = get_all_records() if db else st.session_state.local_db
+                    sel_map = {r.get("channel_id", ""): r for r in all_recs if r.get("channel_id") in _batch_sel}
+                    own_cids = []
+                    skipped_names = []
+                    for cid in _batch_sel:
+                        rec = sel_map.get(cid, {})
+                        if rec.get("discovered_by") == user_name:
+                            own_cids.append(cid)
+                        else:
+                            skipped_names.append(rec.get("channel_name", cid))
+
+                    refreshed = 0
+                    failed_names = []
+                    if own_cids:
+                        progress = st.progress(0, text="准备刷新...")
+                        for i, cid in enumerate(own_cids):
+                            rec = sel_map[cid]
+                            cn = rec.get("channel_name", cid)
+                            progress.progress((i + 1) / len(own_cids), text=f"刷新 {cn} ...")
+                            ok, msg = _refresh_one_channel(
+                                cid, rec.get("channel_name", ""), rec.get("category", ""), owner=user_name
+                            )
+                            if ok and "✅" in msg:
+                                refreshed += 1
+                            else:
+                                failed_names.append(f"{rec.get('channel_name', cid)}")
+                        progress.empty()
+
+                    _clear_batch_selection()
+                    summary = f"✅ 成功刷新 {refreshed} 人"
+                    if skipped_names:
+                        summary += f"，跳过 {len(skipped_names)} 人（非自己挖掘）"
+                    if failed_names:
+                        summary += f"，失败 {len(failed_names)} 人"
+                    st.success(summary)
+                    if failed_names:
+                        st.error("失败：" + "、".join(failed_names[:5]))
+                    st.rerun()
 
             # 批量删除（二次确认）
             if do_batch_delete:
@@ -1336,16 +1668,19 @@ with tab_database:
                 dc1, dc2, _ = st.columns([1, 1, 4])
                 with dc1:
                     if st.button("确定删除", key="batch_confirm_del", type="primary"):
-                        db = get_db()
+                        _db_b = get_db()
                         cids = list(_batch_sel)
-                        if db:
-                            n = db.batch_remove(cids)
-                            st.success(f"🗑 已删除 {n} 人")
+                        if _db_b:
+                            n = _db_b.batch_remove(cids)
                         else:
                             st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") not in _batch_sel]
-                            st.success(f"🗑 已删除 {len(cids)} 人（本地模式）")
+                            n = len(cids)
+                        _count_records.clear()
+                        _get_paginated_records.clear()
+                        _get_dedup_records.clear()
                         _clear_batch_selection()
                         st.session_state.pop("_batch_delete_confirm", None)
+                        st.success(f"🗑 已删除 {n} 人")
                         st.rerun()
                 with dc2:
                     if st.button("取消", key="batch_cancel_del"):
@@ -1354,8 +1689,9 @@ with tab_database:
 
             # 导出选中
             if do_batch_export:
+                all_recs = get_all_records() if db else st.session_state.local_db
                 sel_rows = []
-                for r in records:
+                for r in all_recs:
                     if r.get("channel_id") in _batch_sel:
                         sel_rows.append({
                             "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
@@ -1378,18 +1714,16 @@ with tab_database:
 
             st.markdown("---")
 
-        total_db = len(filtered_db)
-
         if view_mode == "card":
             # 卡片模式：三列紧凑小卡片（打标按键全部收进卡片内）
             num_cols = 3
-            for row_start in range(0, total_db, num_cols):
+            for row_start in range(0, len(records_page), num_cols):
                 cols = st.columns(num_cols)
                 for j in range(num_cols):
                     idx = row_start + j
-                    if idx >= total_db:
+                    if idx >= len(records_page):
                         break
-                    rec = filtered_db[idx]
+                    rec = records_page[idx]
                     with cols[j]:
                         with st.container():
                             # 隐藏标记：让外层容器变成卡片（见CSS :has()规则）
@@ -1414,6 +1748,8 @@ with tab_database:
                             email = rec.get("emails", "")
                             notes = rec.get("notes", "")
 
+                            status_date_html = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+
                             # 卡片信息（紧凑版）
                             _render_html(f"""
                             <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
@@ -1424,6 +1760,7 @@ with tab_database:
                                 <span class="status-tag {status_class}">{status}</span>
                                 <span class="cat-tag">📂 {_safe(cat)}</span>
                             </div>
+                            {status_date_html}
                             <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
                             <div class="kol-sub">👤 挖掘人：{_safe(discoverer) if discoverer else '—'}</div>
                             <div class="kol-email">📧 <span class="email-chip">{_safe(email) if email else '未公开'}</span></div>
@@ -1437,78 +1774,65 @@ with tab_database:
                                 key=f"st_{idx}", label_visibility="collapsed",
                             )
                             if new_status != status:
-                                db = get_db()
+                                _db = get_db()
                                 cid = rec.get("channel_id", "")
-                                if db:
-                                    db.update_status(cid, new_status)
+                                if _db:
+                                    _db.update_status(cid, new_status)
                                 else:
                                     for lr in st.session_state.local_db:
                                         if lr.get("channel_id") == cid:
-                                            lr["status"] = new_status
-                                            lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                            _apply_status_date(lr, new_status)
+                                _count_records.clear()
+                                _get_paginated_records.clear()
+                                _get_dedup_records.clear()
                                 st.rerun()
 
-                            # 复查 / 删除 / 备注（按钮只捕获点击，处理逻辑统一放到列外，
-                            # 避免提示语在窄列里被挤成竖排）
+                            # 刷新 / 删除 / 备注
                             c_rc, c_rm, c_nt = st.columns([1, 1, 4])
                             with c_rc:
-                                do_recheck = st.button("🔄", key=f"rc_{idx}", help="复查活跃度", type="primary")
+                                is_owner = discoverer == st.session_state.get("user_name", "")
+                                if is_owner:
+                                    do_refresh = st.button("🔄", key=f"rc_{idx}", help="刷新数据", type="primary")
+                                else:
+                                    st.button("🔄", key=f"rc_{idx}", help="只能刷新自己挖掘的网红", disabled=True)
+                                    do_refresh = False
                             with c_rm:
                                 do_remove = st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary")
                             with c_nt:
-                                note_val = st.text_input("备注", value=notes, key=f"nt_{idx}",
-                                                         placeholder="例：已发邮件、回复快、要价高...",
-                                                         label_visibility="collapsed")
+                                st.text_input("备注", value=notes, key=f"nt_{_cid}",
+                                              placeholder="例：已发邮件、回复快、要价高...",
+                                              label_visibility="collapsed",
+                                              on_change=_save_note, args=(_cid,))
 
                             # BD邮件（弹窗形式，正文一键复制）
                             if st.button("📧 生成BD邮件", key=f"genmail_db_{idx}", use_container_width=True):
                                 bd_email_dialog(rec)
 
-                            # 备注更新
-                            if note_val != notes:
-                                db = get_db()
-                                cid = rec.get("channel_id", "")
-                                if db:
-                                    db.update_notes(cid, note_val)
+                            # 单条刷新处理
+                            if do_refresh:
+                                ok, msg = _refresh_one_channel(
+                                    rec.get("channel_id", ""), name, rec.get("category", ""), owner=discoverer
+                                )
+                                if ok:
+                                    st.success(msg)
                                 else:
-                                    for lr in st.session_state.local_db:
-                                        if lr.get("channel_id") == cid:
-                                            lr["notes"] = note_val
-
-                            # 复查处理（整卡宽度渲染，提示语不会竖排）
-                            if do_recheck:
-                                if st.session_state.api_key:
-                                    with st.spinner("复查中..."):
-                                        chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
-                                        if chs:
-                                            ch_info = list(chs.values())[0]
-                                            result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
-                                            db = get_db()
-                                            cid = rec.get("channel_id", "")
-                                            if result:
-                                                result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
-                                                if db:
-                                                    db.update_last_checked(cid, True, result)
-                                                st.success(f"✅ {name} 仍然活跃")
-                                            else:
-                                                if db:
-                                                    db.update_last_checked(cid, False)
-                                                st.warning(f"⚠️ {name} 已不活跃")
-                                else:
-                                    st.error("需要 API Key，请先在左侧填入后再复查")
+                                    st.error(msg)
 
                             # 删除处理
                             if do_remove:
-                                db = get_db()
+                                _db = get_db()
                                 cid = rec.get("channel_id", "")
-                                if db:
-                                    db.remove(cid)
+                                if _db:
+                                    _db.remove(cid)
                                 else:
                                     st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                                _count_records.clear()
+                                _get_paginated_records.clear()
+                                _get_dedup_records.clear()
                                 st.rerun()
         else:
             # 列表模式：一行一个博主，字段对齐成表格，适合快速扫全库
-            for idx, rec in enumerate(filtered_db):
+            for idx, rec in enumerate(records_page):
                 with st.container():
                     # 隐藏标记：让外层容器变成列表行（见CSS :has()规则）
                     st.markdown('<div class="kol-row-marker"></div>', unsafe_allow_html=True)
@@ -1546,22 +1870,32 @@ with tab_database:
                             key=f"lst_{idx}", label_visibility="collapsed",
                         )
                         if new_status != status:
-                            db = get_db()
+                            _db = get_db()
                             cid = rec.get("channel_id", "")
-                            if db:
-                                db.update_status(cid, new_status)
+                            if _db:
+                                _db.update_status(cid, new_status)
                             else:
                                 for lr in st.session_state.local_db:
                                     if lr.get("channel_id") == cid:
-                                        lr["status"] = new_status
-                                        lr["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                        _apply_status_date(lr, new_status)
+                            _count_records.clear()
+                            _get_paginated_records.clear()
+                            _get_dedup_records.clear()
                             st.rerun()
+                        _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+                        if _status_date:
+                            _render_html(_status_date)
                     with r6:
                         _render_html(f'<span class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</span>')
                     with r7:
                         a_rc, a_rm, a_ml = st.columns([1, 1, 2.4])
                         with a_rc:
-                            do_recheck = st.button("🔄", key=f"lrc_{idx}", help="复查活跃度", type="primary")
+                            is_owner = discoverer == st.session_state.get("user_name", "")
+                            if is_owner:
+                                do_refresh = st.button("🔄", key=f"lrc_{idx}", help="刷新数据", type="primary")
+                            else:
+                                st.button("🔄", key=f"lrc_{idx}", help="只能刷新自己挖掘的网红", disabled=True)
+                                do_refresh = False
                         with a_rm:
                             do_remove = st.button("🗑", key=f"lrm_{idx}", help="从库中移除", type="primary")
                         with a_ml:
@@ -1569,43 +1903,35 @@ with tab_database:
                         if do_mail:
                             bd_email_dialog(rec)
 
-                    # 复查处理（整行宽度渲染，提示语不会竖排）
-                    if do_recheck:
-                        if st.session_state.api_key:
-                            with st.spinner("复查中..."):
-                                chs = get_channels([rec.get("channel_id", "")], st.session_state.api_key, st.session_state.quota)
-                                if chs:
-                                    ch_info = list(chs.values())[0]
-                                    result = verify_channel(ch_info, st.session_state.api_key, st.session_state.quota, st.session_state.config)
-                                    db = get_db()
-                                    cid = rec.get("channel_id", "")
-                                    if result:
-                                        result["scores"] = score_channel(result, rec.get("category"), st.session_state.config)
-                                        if db:
-                                            db.update_last_checked(cid, True, result)
-                                        st.success(f"✅ {name} 仍然活跃")
-                                    else:
-                                        if db:
-                                            db.update_last_checked(cid, False)
-                                        st.warning(f"⚠️ {name} 已不活跃")
+                    # 单条刷新处理
+                    if do_refresh:
+                        ok, msg = _refresh_one_channel(
+                            rec.get("channel_id", ""), name, rec.get("category", ""), owner=discoverer
+                        )
+                        if ok:
+                            st.success(msg)
                         else:
-                            st.error("需要 API Key，请先在左侧填入后再复查")
+                            st.error(msg)
 
                     # 删除处理
                     if do_remove:
-                        db = get_db()
+                        _db = get_db()
                         cid = rec.get("channel_id", "")
-                        if db:
-                            db.remove(cid)
+                        if _db:
+                            _db.remove(cid)
                         else:
                             st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                        _count_records.clear()
+                        _get_paginated_records.clear()
+                        _get_dedup_records.clear()
                         st.rerun()
 
         # 导出
         st.markdown("---")
-        if records:
+        all_records = get_all_records() if db else st.session_state.local_db
+        if all_records:
             export_rows = []
-            for r in records:
+            for r in all_records:
                 export_rows.append({
                     "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
                     "垂类": r.get("category", ""), "订阅量": r.get("subscribers", 0),
@@ -1613,6 +1939,7 @@ with tab_database:
                     "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
                     "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
                     "发邮件日期": r.get("email_sent_date", ""),
+                    "引入日期": r.get("introduced_date", ""),
                 })
             buffer = BytesIO()
             pd.DataFrame(export_rows).to_excel(buffer, index=False, engine="openpyxl")
