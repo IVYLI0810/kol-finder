@@ -16,8 +16,10 @@ from streamlit_local_storage import LocalStorage
 from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
-    CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG,
+    CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
+    split_main_pending,
 )
+from ai_analyzer import analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL
 
 # ============================================================
 # 团队公共库配置（写死在代码里，所有人共用，不用每次填）
@@ -132,6 +134,16 @@ st.markdown("""
         display: inline-block; padding: 4px 13px; border-radius: 999px;
         font-size: 12px; font-weight: 800; background: #f5c542; color: #1c1c1e;
         border: 2px solid #1c1c1e;
+    }
+    .rel-badge {
+        display: inline-block; padding: 4px 13px; border-radius: 999px;
+        font-size: 12px; font-weight: 800; background: #fffdf7; color: #8674d6;
+        border: 2px solid #8674d6;
+    }
+    .ai-tag {
+        display: inline-block; padding: 4px 11px; border-radius: 999px;
+        font-size: 12px; font-weight: 700; background: #fff0f4; color: #a05c74;
+        border: 2px dashed #d98ba3;
     }
 
     .stat-grid { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
@@ -498,6 +510,58 @@ def _apply_status_date(record: dict, new_status: str):
         record["introduced_date"] = now
 
 
+def _append_reason(old_notes: str, new_status: str, reason: str) -> str:
+    """把拒绝/淘汰原因拼进备注（带日期标记，方便以后翻查）。"""
+    tag = "拒绝原因" if new_status == "已拒绝" else "淘汰原因"
+    stamp = datetime.now().strftime("%m-%d")
+    entry = f"[{stamp}{tag}] {reason.strip()}"
+    old_notes = (old_notes or "").strip()
+    return f"{old_notes}\n{entry}" if old_notes else entry
+
+
+def _apply_status_change(rec: dict, new_status: str, reason: str = ""):
+    """应用单条状态变更（自动判断 DB/本地模式）；填了原因就追加到备注。"""
+    cid = rec.get("channel_id", "")
+    _db = get_db()
+    if _db:
+        _db.update_status(cid, new_status)
+        if reason.strip():
+            _db.update_notes(cid, _append_reason(rec.get("notes", "") or "", new_status, reason))
+    else:
+        for lr in st.session_state.local_db:
+            if lr.get("channel_id") == cid:
+                _apply_status_date(lr, new_status)
+                if reason.strip():
+                    lr["notes"] = _append_reason(lr.get("notes", "") or "", new_status, reason)
+                break
+    _count_records.clear()
+    _get_paginated_records.clear()
+    _get_dedup_records.clear()
+
+
+def _enrich_with_ai(results: list, status_box=None) -> str:
+    """第二期核心：挖掘完成后把结果批量交给 AI——定垂类、打相关度、出标签，
+    然后用四维权重重算评分并重新排序。返回 AI 说明文字供界面显示。
+    AI 未配置/失败时内部会给中性值，不影响主流程。"""
+    if not results:
+        return ""
+
+    def _say(m):
+        if status_box is not None:
+            try:
+                status_box.info(f"🔍 {m}")
+            except Exception:
+                pass
+
+    _ok, _fail, note = analyze_channels(results, status_cb=_say)
+    for r in results:
+        if r.get("ai_category"):
+            r["category"] = r["ai_category"]
+        r["scores"] = score_channel(r, st.session_state.config)
+    results.sort(key=lambda x: x["scores"]["total"], reverse=True)
+    return note
+
+
 def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owner: str = "") -> tuple[bool, str]:
     """刷新单个网红的基础数据（订阅/均播/评分/最近更新）。
 
@@ -521,7 +585,12 @@ def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owne
         _db = get_db()
 
         if result:
-            result["scores"] = score_channel(result, category, st.session_state.config)
+            # 第二期：刷新时也跑一次 AI（单个频道，几秒钟），保证垂类/相关度是最新的
+            if ai_ready():
+                analyze_channels([result])
+                if result.get("ai_category"):
+                    result["category"] = result["ai_category"]
+            result["scores"] = score_channel(result, st.session_state.config)
             if _db:
                 _db.update_last_checked(channel_id, True, result)
             else:
@@ -751,7 +820,8 @@ def generate_email_draft(ch: dict, user_name: str, kkt_id: str) -> tuple[str, st
     """
     name = ch.get("channel_name", "크리에이터")
     category = ch.get("category", "")
-    cat_ko = CATEGORY_KO.get(category, "")
+    # 老的中文垂类走映射表；AI 判定的新垂类本身就是韩文品类名，直接用
+    cat_ko = CATEGORY_KO.get(category, "") or category
     sender = user_name or "마케팅팀 담당자"
     kkt = kkt_id or "（카카오톡 ID）"
 
@@ -828,6 +898,113 @@ def bd_email_dialog(rec):
 
     st.markdown("##### 📋 邮件正文（点右上角图标一键复制）")
     st.code(body, language=None)
+
+
+def _render_result_card(ch: dict, rank: int, key_prefix: str):
+    """渲染一张搜索结果卡片 + 操作按钮（主列表和待定区共用）。
+    key_prefix 用于区分区域，避免按钮 key 冲突。"""
+    score = ch["scores"]["total"]
+    score_class = "score-high" if score >= 70 else ("score-mid" if score >= 50 else "score-low")
+    commercial = ch.get("commercial_history", {})
+    has_comm = commercial.get("has_commercial", False)
+    emails = ch.get("emails", [])
+    email_display = emails[0] if emails else "未公开"
+    thumbnails = ch.get("recent_thumbnails", [])
+
+    # 缩略图HTML
+    thumb_html = ""
+    if thumbnails:
+        items = ""
+        for t in thumbnails[:2]:
+            items += f'<div class="thumb-item"><img src="{t["url"]}" alt="" loading="lazy" decoding="async"><span>{t["date"]}</span></div>'
+        thumb_html = f'<div class="thumb-row">{items}</div>'
+
+    # 商业化标记
+    comm_html = ""
+    if has_comm:
+        evidence = ", ".join(commercial.get("evidence", [])[:3])
+        comm_html = f'<span class="commercial-badge">💰 有商业合作 ({_safe(evidence)})</span>'
+
+    # AI 垂类 + 相关度 + 关键词标签（第二期）
+    ai_cat = ch.get("category", "") or "未判定"
+    rel_html = ""
+    if ch.get("ai_analyzed"):
+        rel_html = f'<span class="rel-badge">🎯 AI相关度 {ch.get("ai_relevance", "-")}</span>'
+    tag_html = "".join(
+        f'<span class="ai-tag">#{_safe(t)}</span>' for t in (ch.get("ai_tags") or [])[:2]
+    )
+
+    # 代表视频标题（清理特殊符号，防止破坏排版）
+    titles_clean = " / ".join(_safe(t) for t in ch.get("recent_titles", [])[:3])
+
+    _render_html(f"""
+    <div class="channel-card">
+        <div class="card-head">
+            <div style="display:flex; align-items:flex-start;">
+                <span class="rank-circle">{rank}</span>
+                <div>
+                    <div class="card-name">{_safe(ch['channel_name'])}</div>
+                    <div class="tag-row" style="margin-top:8px; margin-bottom:0;">
+                        <span class="cat-tag">🤖 {_safe(ai_cat)}</span>
+                        {rel_html}
+                        {tag_html}
+                        {comm_html}
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center; gap:14px;">
+                <span class="score-badge {score_class}">{score}</span>
+                <div class="card-links">
+                    <a class="link-home" href="{ch['channel_url']}" target="_blank">主页 ↗</a><br>
+                    <a class="link-about" href="{ch.get('about_url', ch['channel_url'])}" target="_blank">简介页 ↗</a>
+                </div>
+            </div>
+        </div>
+        <div class="stat-grid">
+            <div class="stat-pill stat-p1">📺 {ch['subscribers']:,}<span class="k">订阅数</span></div>
+            <div class="stat-pill stat-p2">👁 {ch['avg_views_30d']:,}<span class="k">30天均播</span></div>
+            <div class="stat-pill stat-p3">📈 {ch['view_sub_ratio']}%<span class="k">播/订比</span></div>
+            <div class="stat-pill stat-p4">🕐 {ch['last_upload_days_ago']}天前<span class="k">最近更新</span></div>
+        </div>
+        <div class="email-line">📧 联系邮箱 <span class="email-chip">{_safe(email_display)}</span></div>
+        <div class="titles-line">代表视频：{titles_clean}</div>
+        <div class="score-detail-line">
+            评分明细 · 垂类{ch['scores']['relevance']} ＋ 数据{ch['scores']['data_health']} ＋
+            活跃{ch['scores']['frequency']} ＋ 商业{ch['scores']['commercial']}
+        </div>
+        {thumb_html}
+    </div>
+    """)
+
+    # 操作按钮
+    col_a1, col_a2, col_a3 = st.columns([1, 1, 1.3])
+    with col_a1:
+        if st.button("✅ 加入网红库", key=f"{key_prefix}add_{rank}", use_container_width=True):
+            db = get_db()
+            if db:
+                if db.add_influencer(ch, st.session_state.user_name):
+                    st.success(f"已添加「{ch['channel_name']}」")
+                    _count_records.clear()
+                    _get_paginated_records.clear()
+                    _get_dedup_records.clear()
+                else:
+                    st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
+            else:
+                # 本地模式
+                ch["status"] = "新发现"
+                ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                ch["discovered_by"] = st.session_state.user_name
+                st.session_state.local_db.append(ch)
+                _get_dedup_records.clear()
+                st.success(f"已添加「{ch['channel_name']}」（本地模式）")
+    with col_a2:
+        if st.button("跳过", key=f"{key_prefix}skip_{rank}", use_container_width=True):
+            st.session_state.search_results.remove(ch)
+            st.rerun()
+    with col_a3:
+        if st.button("📧 生成BD邮件", key=f"{key_prefix}genmail_{rank}", use_container_width=True):
+            bd_email_dialog(ch)
+    st.markdown("")
 
 
 # ============================================================
@@ -1065,22 +1242,18 @@ with tab_search:
     if not st.session_state.api_key:
         st.info("👈 请先在左侧填入 YouTube API Key")
     else:
-        # ---------- 垂类选择 ----------
-        category_select = st.selectbox(
-            "垂类", options=list(KW_LIB.keys()),
-            help="切换垂类后，下方推荐关键词会跟着变",
-        )
-
         # ---------- 推荐关键词 · 一键点选 ----------
-        st.markdown("✨ **推荐关键词** · 点击任意一个直接搜索")
-        chip_kws = KW_LIB[category_select]
-        for row_start in range(0, len(chip_kws), 3):
-            chip_cols = st.columns(3)
-            for j, kw in enumerate(chip_kws[row_start:row_start + 3]):
-                with chip_cols[j]:
-                    if st.button(kw, key=f"kwchip_{category_select}_{row_start + j}",
-                                 use_container_width=True):
-                        st.session_state.pending_kw = kw
+        # 第二期起取消了"先选垂类"：点任意关键词直接搜，挖到的博主由 AI 自动判定垂类和相关度
+        st.markdown("✨ **推荐关键词** · 点击任意一个直接搜索（博主的垂类由 AI 自动判定，不用手选）")
+        for group_name, group_kws in KW_LIB.items():
+            st.caption(f"🗂 {group_name}")
+            for row_start in range(0, len(group_kws), 3):
+                chip_cols = st.columns(3)
+                for j, kw in enumerate(group_kws[row_start:row_start + 3]):
+                    with chip_cols[j]:
+                        if st.button(kw, key=f"kwchip_{group_name}_{row_start + j}",
+                                     use_container_width=True):
+                            st.session_state.pending_kw = kw
 
         st.markdown("")
 
@@ -1092,7 +1265,7 @@ with tab_search:
             ["🕐 按时间（新视频优先，小博主更多）", "🎯 按相关性（内容更对口）"],
             index=0 if st.session_state.search_order.startswith("🕐") else 1,
             horizontal=True,
-            help="按时间：搜最近60天的新视频，活跃小博主更容易被挖到；按相关性：搜最匹配的视频，内容更精准但大频道偏多。两种配额消耗相同。",
+            help=f"按时间：搜最近 {st.session_state.config.get('window_days', 60)} 天的新视频，活跃小博主更容易被挖到；按相关性：搜最匹配的视频，内容更精准但大频道偏多。两种配额消耗相同。",
         )
         st.session_state.search_order = order_choice
         search_order_api = "date" if order_choice.startswith("🕐") else "relevance"
@@ -1108,7 +1281,7 @@ with tab_search:
             search_btn = st.button("🔍 搜索", use_container_width=True)
         with col3:
             batch_btn = st.button("⚡ 批量", use_container_width=True,
-                                  help="使用当前垂类全部预置关键词搜索")
+                                  help="使用全部预置关键词依次搜索（配额消耗大，建议配额充足时用）")
 
         st.markdown("")
 
@@ -1130,47 +1303,67 @@ with tab_search:
 
         # 单个搜索
         if search_keyword:
-            with st.spinner(f"正在搜索「{search_keyword}」并验证活跃度..."):
-                results = search_and_verify(
-                    keyword=search_keyword,
-                    category=category_select,
-                    api_key=st.session_state.api_key,
-                    quota=st.session_state.quota,
-                    config=st.session_state.config,
-                    db_records=db_records,
-                    order=search_order_api,
-                )
-                st.session_state.search_results = results
-                st.session_state.search_log.append({
-                    "keyword": search_keyword, "category": category_select,
-                    "time": datetime.now().strftime("%H:%M"), "results": len(results),
-                })
-                st.session_state.search_log = st.session_state.search_log[-10:]
-                if results:
-                    st.success(f"✅ 找到 {len(results)} 个符合条件的活跃博主")
+            st.session_state.quota.last_error = ""
+            _status_box = st.empty()
+            _status_box.info(f"🔍 正在搜索「{search_keyword}」…")
+            results = search_and_verify(
+                keyword=search_keyword,
+                api_key=st.session_state.api_key,
+                quota=st.session_state.quota,
+                config=st.session_state.config,
+                db_records=db_records,
+                order=search_order_api,
+                status_cb=lambda m: _status_box.info(f"🔍 {m}"),
+            )
+            # 第二期：挖完交给 AI 定垂类、打相关度、出标签，再按新权重重排
+            _ai_note = _enrich_with_ai(results, _status_box) if results else ""
+            st.session_state.search_results = results
+            st.session_state.search_log.append({
+                "keyword": search_keyword,
+                "time": datetime.now().strftime("%H:%M"), "results": len(results),
+            })
+            st.session_state.search_log = st.session_state.search_log[-10:]
+            if results:
+                _status_box.success(f"✅ 找到 {len(results)} 个符合条件的活跃博主")
+                if _ai_note:
+                    st.caption(f"🤖 {_ai_note}")
+            else:
+                _err = st.session_state.quota.last_error
+                if _err:
+                    _status_box.error(f"❌ {_err}")
                 else:
-                    st.warning("未找到符合条件的博主（可能都已不活跃或已在库中）")
+                    _status_box.warning("未找到符合条件的博主（可能都已不活跃或已在库中）")
 
         # 批量搜索
         if batch_btn:
-            keywords = KW_LIB[category_select]
+            keywords = [kw for kws in KW_LIB.values() for kw in kws]
             all_results = []
+            errors_seen = []
+            st.session_state.quota.last_error = ""
+            # 每个关键词的成本 = 搜索成本（翻页/Shorts/双排序）+ 验证缓冲（约50频道×3）
+            per_kw_cost = estimate_search_cost(st.session_state.config) + 150
             progress = st.progress(0)
             status_text = st.empty()
 
             for i, kw in enumerate(keywords):
-                if not st.session_state.quota.can_afford(110):
-                    status_text.warning(f"⚠️ 配额不足，已完成 {i}/{len(keywords)}")
+                if not st.session_state.quota.can_afford(per_kw_cost):
+                    status_text.warning(f"⚠️ 配额不足，已完成 {i}/{len(keywords)}，剩余关键词先跳过")
                     break
-                status_text.text(f"搜索中 ({i+1}/{len(keywords)}): {kw}")
+                status_text.info(f"🔍 搜索中 ({i + 1}/{len(keywords)}): {kw} · 已找到 {len(all_results)} 人")
                 results = search_and_verify(
-                    keyword=kw, category=category_select,
+                    keyword=kw,
                     api_key=st.session_state.api_key,
                     quota=st.session_state.quota,
                     config=st.session_state.config,
                     db_records=db_records,
                     order=search_order_api,
+                    status_cb=lambda m, _i=i, _kw=kw: status_text.info(
+                        f"({_i + 1}/{len(keywords)} · {_kw}) {m}"),
                 )
+                if st.session_state.quota.last_error:
+                    if st.session_state.quota.last_error not in errors_seen:
+                        errors_seen.append(st.session_state.quota.last_error)
+                    st.session_state.quota.last_error = ""
                 all_results.extend(results)
                 progress.progress((i + 1) / len(keywords))
 
@@ -1181,9 +1374,15 @@ with tab_search:
                 if r["channel_id"] not in seen:
                     seen.add(r["channel_id"])
                     unique.append(r)
-            unique.sort(key=lambda x: x["scores"]["total"], reverse=True)
+            # 第二期：合并后统一交给 AI 分析，再按新权重重排
+            _ai_note_batch = _enrich_with_ai(unique, status_text) if unique else ""
             st.session_state.search_results = unique
             status_text.success(f"✅ 批量完成，共 {len(unique)} 个活跃博主")
+            if _ai_note_batch:
+                st.caption(f"🤖 {_ai_note_batch}")
+            if errors_seen:
+                st.warning("⚠️ 部分关键词遇到问题：" + "；".join(errors_seen[:2]) +
+                           "（其余关键词已正常完成）")
 
         # ---------- 搜索结果（和搜索同页展示） ----------
         if st.session_state.search_results:
@@ -1200,7 +1399,8 @@ with tab_search:
             with col_f2:
                 sort_by = st.selectbox("排序", ["综合评分", "订阅量", "近30天均播", "最近更新"])
 
-            filtered = [r for r in results if r["scores"]["total"] >= min_score_filter]
+            ai_gate = int(st.session_state.config.get("ai_min_relevance", 40))
+            filtered, pending = split_main_pending(results, min_score_filter, ai_gate)
             sort_keys = {
                 "综合评分": lambda x: x["scores"]["total"],
                 "订阅量": lambda x: x["subscribers"],
@@ -1209,103 +1409,23 @@ with tab_search:
             }
             filtered.sort(key=sort_keys[sort_by], reverse=True)
 
-            st.markdown(f"共 {len(filtered)} 个博主")
+            if pending:
+                st.markdown(f"共 {len(filtered)} 个博主 · 另有 {len(pending)} 个（评分未过线或AI相关度偏低），收在下方待定区")
+            else:
+                st.markdown(f"共 {len(filtered)} 个博主")
             st.markdown("")
 
-            # 频道卡片
+            # 频道卡片（主列表）
             for idx, ch in enumerate(filtered):
-                score = ch["scores"]["total"]
-                score_class = "score-high" if score >= 70 else ("score-mid" if score >= 50 else "score-low")
-                commercial = ch.get("commercial_history", {})
-                has_comm = commercial.get("has_commercial", False)
-                emails = ch.get("emails", [])
-                email_display = emails[0] if emails else "未公开"
-                thumbnails = ch.get("recent_thumbnails", [])
+                _render_result_card(ch, idx + 1, "m")
 
-                # 缩略图HTML
-                thumb_html = ""
-                if thumbnails:
-                    items = ""
-                    for t in thumbnails[:2]:
-                        items += f'<div class="thumb-item"><img src="{t["url"]}" alt="" loading="lazy" decoding="async"><span>{t["date"]}</span></div>'
-                    thumb_html = f'<div class="thumb-row">{items}</div>'
-
-                # 商业化标记
-                comm_html = ""
-                if has_comm:
-                    evidence = ", ".join(commercial.get("evidence", [])[:3])
-                    comm_html = f'<span class="commercial-badge">💰 有商业合作 ({_safe(evidence)})</span>'
-
-                # 代表视频标题（清理特殊符号，防止破坏排版）
-                titles_clean = " / ".join(_safe(t) for t in ch.get("recent_titles", [])[:3])
-
-                _render_html(f"""
-                <div class="channel-card">
-                    <div class="card-head">
-                        <div style="display:flex; align-items:flex-start;">
-                            <span class="rank-circle">{idx+1}</span>
-                            <div>
-                                <div class="card-name">{_safe(ch['channel_name'])}</div>
-                                <div class="tag-row" style="margin-top:8px; margin-bottom:0;">
-                                    <span class="cat-tag">📂 {_safe(ch.get('category', ''))}</span>
-                                    {comm_html}
-                                </div>
-                            </div>
-                        </div>
-                        <div style="display:flex; align-items:center; gap:14px;">
-                            <span class="score-badge {score_class}">{score}</span>
-                            <div class="card-links">
-                                <a class="link-home" href="{ch['channel_url']}" target="_blank">主页 ↗</a><br>
-                                <a class="link-about" href="{ch.get('about_url', ch['channel_url'])}" target="_blank">简介页 ↗</a>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="stat-grid">
-                        <div class="stat-pill stat-p1">📺 {ch['subscribers']:,}<span class="k">订阅数</span></div>
-                        <div class="stat-pill stat-p2">👁 {ch['avg_views_30d']:,}<span class="k">30天均播</span></div>
-                        <div class="stat-pill stat-p3">📈 {ch['view_sub_ratio']}%<span class="k">播/订比</span></div>
-                        <div class="stat-pill stat-p4">🕐 {ch['last_upload_days_ago']}天前<span class="k">最近更新</span></div>
-                    </div>
-                    <div class="email-line">📧 联系邮箱 <span class="email-chip">{_safe(email_display)}</span></div>
-                    <div class="titles-line">代表视频：{titles_clean}</div>
-                    <div class="score-detail-line">
-                        评分明细 · 垂直{ch['scores']['verticality']} ＋ 商业{ch['scores']['commercial']} ＋
-                        数据{ch['scores']['data_health']} ＋ 频率{ch['scores']['frequency']} ＋
-                        关键词{ch['scores']['keywords']}
-                    </div>
-                    {thumb_html}
-                </div>
-                """)
-
-                # 操作按钮
-                col_a1, col_a2, col_a3 = st.columns([1, 1, 1.3])
-                with col_a1:
-                    if st.button("✅ 加入网红库", key=f"add_{idx}", use_container_width=True):
-                        db = get_db()
-                        if db:
-                            if db.add_influencer(ch, st.session_state.user_name):
-                                st.success(f"已添加「{ch['channel_name']}」")
-                                _count_records.clear()
-                                _get_paginated_records.clear()
-                                _get_dedup_records.clear()
-                            else:
-                                st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
-                        else:
-                            # 本地模式
-                            ch["status"] = "新发现"
-                            ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                            ch["discovered_by"] = st.session_state.user_name
-                            st.session_state.local_db.append(ch)
-                            _get_dedup_records.clear()
-                            st.success(f"已添加「{ch['channel_name']}」（本地模式）")
-                with col_a2:
-                    if st.button("跳过", key=f"skip_{idx}", use_container_width=True):
-                        st.session_state.search_results.remove(ch)
-                        st.rerun()
-                with col_a3:
-                    if st.button("📧 生成BD邮件", key=f"genmail_{idx}", use_container_width=True):
-                        bd_email_dialog(ch)
-                st.markdown("")
+            # 待定区：未达最低评分、或 AI 相关度偏低的博主，默认折叠，留给人工翻看
+            if pending:
+                with st.expander(f"🕵️ 待定区 · {len(pending)} 个待人工翻看（评分未过线或AI相关度<{ai_gate}，不直接丢弃）"):
+                    st.caption("这些博主没过线上的标准，但可能值得看一眼——看中了直接点「加入网红库」。")
+                    pending.sort(key=lambda x: x["scores"]["total"], reverse=True)
+                    for pi, ch in enumerate(pending):
+                        _render_result_card(ch, pi + 1, "p")
 
             # 批量操作
             st.markdown("---")
@@ -1331,7 +1451,10 @@ with tab_search:
                     for ch in filtered:
                         export_data.append({
                             "频道名": ch["channel_name"], "主页链接": ch["channel_url"],
-                            "垂类": ch.get("category", ""), "订阅量": ch["subscribers"],
+                            "垂类(AI判定)": ch.get("category", ""),
+                            "AI相关度": ch.get("ai_relevance", "") if ch.get("ai_analyzed") else "",
+                            "AI标签": " / ".join(ch.get("ai_tags", [])),
+                            "订阅量": ch["subscribers"],
                             "近30天均播": ch["avg_views_30d"], "评分": ch["scores"]["total"],
                             "联系邮箱": ", ".join(ch.get("emails", [])) or "未公开",
                             "有商业合作": "是" if ch.get("commercial_history", {}).get("has_commercial") else "否",
@@ -1354,7 +1477,7 @@ with tab_search:
             st.markdown("")
             st.markdown("#### 📜 最近搜索")
             for log in reversed(st.session_state.search_log[-8:]):
-                st.caption(f"{log['time']} · {log['keyword']} · {log['category']} · {log['results']}个结果")
+                st.caption(f"{log['time']} · {log['keyword']} · {log['results']}个结果")
 
 
 # ============================================================
@@ -1364,6 +1487,11 @@ with tab_search:
 with tab_database:
     st.markdown("### 网红库")
     st.markdown("")
+
+    # 状态变更的成功提示统一在这里显示（操作时先写入 session，rerun 后弹出，避免提示消失）
+    _chg_msg = st.session_state.pop("_status_change_msg", None)
+    if _chg_msg:
+        st.success(_chg_msg)
 
     db = get_db()
     user_name = st.session_state.user_name or ""
@@ -1453,7 +1581,9 @@ with tab_database:
             )
         with col_f2:
             st.multiselect(
-                "垂类", options=list(KW_LIB.keys()), default=[], placeholder="全部垂类",
+                "垂类", options=AI_CATEGORY_TABLE + list(KW_LIB.keys()),
+                default=[], placeholder="全部垂类",
+                help="新挖掘的博主垂类由 AI 判定（韩文品类名），老博主是原来的中文垂类",
                 key="filter_cat", on_change=_reset_db_page,
             )
         with col_f3:
@@ -1597,23 +1727,66 @@ with tab_database:
             with bc5:
                 do_batch_export = st.button("📥 导出选中", key="batch_do_export", use_container_width=True)
 
-            # 批量改状态
-            if do_batch_status:
+            # 批量改状态（已拒绝/已淘汰必须填原因并二次确认，其余状态立即生效）
+            def _batch_apply(new_status: str, reason: str = ""):
                 _db_b = get_db()
                 cids = list(_batch_sel)
+                reason = reason.strip()
+                rec_map_b = {}
+                if reason:
+                    all_recs_b = get_all_records() if _db_b else st.session_state.local_db
+                    rec_map_b = {r.get("channel_id", ""): r for r in all_recs_b}
                 if _db_b:
-                    n = _db_b.batch_update_status(cids, batch_new_status)
+                    n = _db_b.batch_update_status(cids, new_status)
+                    if reason:
+                        for cid in cids:
+                            old = (rec_map_b.get(cid, {}).get("notes", "") or "")
+                            _db_b.update_notes(cid, _append_reason(old, new_status, reason))
                 else:
                     for lr in st.session_state.local_db:
                         if lr.get("channel_id") in _batch_sel:
-                            _apply_status_date(lr, batch_new_status)
+                            _apply_status_date(lr, new_status)
+                            if reason:
+                                lr["notes"] = _append_reason(lr.get("notes", "") or "", new_status, reason)
                     n = len(cids)
                 _count_records.clear()
                 _get_paginated_records.clear()
                 _get_dedup_records.clear()
                 _clear_batch_selection()
-                st.success(f"✅ 已将 {n} 人状态改为「{batch_new_status}」")
+                st.session_state.pop("_batch_reason_needed", None)
+                suffix = "，原因已记入备注" if reason else ""
+                st.session_state["_status_change_msg"] = f"✅ 已将 {n} 人状态改为「{new_status}」{suffix}"
                 st.rerun()
+
+            if do_batch_status:
+                if batch_new_status in ("已拒绝", "已淘汰"):
+                    st.session_state["_batch_reason_needed"] = True
+                else:
+                    _batch_apply(batch_new_status)
+
+            if st.session_state.get("_batch_reason_needed"):
+                if batch_new_status not in ("已拒绝", "已淘汰"):
+                    # 目标状态换成了不需要原因的，自动退出填原因状态
+                    st.session_state.pop("_batch_reason_needed", None)
+                else:
+                    st.warning(f"✍️ 将 {len(_batch_sel)} 人标为「{batch_new_status}」需要填写原因（会记入备注，方便以后复盘）")
+                    _batch_reason = st.text_input(
+                        "原因（必填）", key="batch_reason_input",
+                        placeholder="例：内容不垂直 / 要价太高 / 长期不回复…",
+                    )
+                    brc1, brc2, _ = st.columns([1, 1, 4])
+                    with brc1:
+                        if st.button("✅ 确认修改", key="batch_reason_ok", use_container_width=True, type="primary"):
+                            if _batch_reason.strip():
+                                _batch_apply(batch_new_status, _batch_reason)
+                            else:
+                                st.session_state["_batch_reason_err"] = True
+                    with brc2:
+                        if st.button("取消", key="batch_reason_cancel", use_container_width=True):
+                            st.session_state.pop("_batch_reason_needed", None)
+                            st.rerun()
+                    if st.session_state.pop("_batch_reason_err", False):
+                        st.warning("⚠️ 请先填写原因再确认")
 
             # 批量刷新数据（只能刷新自己挖掘的）
             if do_batch_refresh:
@@ -1767,24 +1940,40 @@ with tab_database:
                             <hr class="kol-divider">
                             """)
 
-                            # 状态下拉
+                            # 状态下拉（已拒绝/已淘汰 必须填原因+确认才写入，只选择不写库）
+                            _ST_OPTS = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                            if st.session_state.pop(f"revert_st_{idx}", False):
+                                # 取消后还原下拉：必须把 key 设回当前状态（pop 不掉前端组件状态）
+                                st.session_state[f"st_{idx}"] = status if status in _ST_OPTS else "新发现"
                             new_status = st.selectbox(
-                                "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
-                                index=["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"].index(status),
+                                "状态", _ST_OPTS,
+                                index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
                                 key=f"st_{idx}", label_visibility="collapsed",
                             )
-                            if new_status != status:
-                                _db = get_db()
-                                cid = rec.get("channel_id", "")
-                                if _db:
-                                    _db.update_status(cid, new_status)
-                                else:
-                                    for lr in st.session_state.local_db:
-                                        if lr.get("channel_id") == cid:
-                                            _apply_status_date(lr, new_status)
-                                _count_records.clear()
-                                _get_paginated_records.clear()
-                                _get_dedup_records.clear()
+                            if new_status in ("已拒绝", "已淘汰") and new_status != status:
+                                _reason = st.text_input(
+                                    "原因（必填）", key=f"rsn_st_{idx}",
+                                    placeholder="例：内容不垂直 / 要价太高…",
+                                )
+                                _c1, _c2, _ = st.columns([1, 1, 2])
+                                with _c1:
+                                    if st.button("确认", key=f"cfm_st_{idx}", use_container_width=True, type="primary"):
+                                        if _reason.strip():
+                                            _apply_status_change(rec, new_status, _reason)
+                                            st.session_state["_status_change_msg"] = \
+                                                f"✅ 「{name}」已改为 {new_status}，原因已记入备注"
+                                            st.rerun()
+                                        else:
+                                            st.session_state[f"rsnerr_st_{idx}"] = True
+                                with _c2:
+                                    if st.button("取消", key=f"ccl_st_{idx}", use_container_width=True):
+                                        st.session_state[f"revert_st_{idx}"] = True
+                                        st.rerun()
+                                if st.session_state.pop(f"rsnerr_st_{idx}", False):
+                                    st.warning("⚠️ 请先填写原因再确认")
+                            elif new_status != status:
+                                _apply_status_change(rec, new_status)
+                                st.session_state["_status_change_msg"] = f"✅ 「{name}」已改为 {new_status}"
                                 st.rerun()
 
                             # 刷新 / 删除 / 备注
@@ -1864,24 +2053,15 @@ with tab_database:
                     with r4:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
+                        _ST_OPTS_L = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                        if st.session_state.pop(f"revert_lst_{idx}", False):
+                            # 取消后还原下拉：必须把 key 设回当前状态（pop 不掉前端组件状态）
+                            st.session_state[f"lst_{idx}"] = status if status in _ST_OPTS_L else "新发现"
                         new_status = st.selectbox(
-                            "状态", ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
-                            index=["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"].index(status),
+                            "状态", _ST_OPTS_L,
+                            index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
                             key=f"lst_{idx}", label_visibility="collapsed",
                         )
-                        if new_status != status:
-                            _db = get_db()
-                            cid = rec.get("channel_id", "")
-                            if _db:
-                                _db.update_status(cid, new_status)
-                            else:
-                                for lr in st.session_state.local_db:
-                                    if lr.get("channel_id") == cid:
-                                        _apply_status_date(lr, new_status)
-                            _count_records.clear()
-                            _get_paginated_records.clear()
-                            _get_dedup_records.clear()
-                            st.rerun()
                         _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
                         if _status_date:
                             _render_html(_status_date)
@@ -1902,6 +2082,33 @@ with tab_database:
                             do_mail = st.button("📧 邮件", key=f"lmail_{idx}", use_container_width=True)
                         if do_mail:
                             bd_email_dialog(rec)
+
+                    # 状态变更处理（整行展示，拒绝/淘汰必须填原因）
+                    if new_status in ("已拒绝", "已淘汰") and new_status != status:
+                        _rl = st.text_input(
+                            f"将「{name}」标为 {new_status} 的原因（必填）", key=f"rsn_lst_{idx}",
+                            placeholder="例：内容不垂直 / 要价太高 / 长期不回复…",
+                        )
+                        _lc1, _lc2, _ = st.columns([2, 2, 6])
+                        with _lc1:
+                            if st.button("确认修改", key=f"cfm_lst_{idx}", use_container_width=True, type="primary"):
+                                if _rl.strip():
+                                    _apply_status_change(rec, new_status, _rl)
+                                    st.session_state["_status_change_msg"] = \
+                                        f"✅ 「{name}」已改为 {new_status}，原因已记入备注"
+                                    st.rerun()
+                                else:
+                                    st.session_state[f"rsnerr_lst_{idx}"] = True
+                        with _lc2:
+                            if st.button("取消", key=f"ccl_lst_{idx}", use_container_width=True):
+                                st.session_state[f"revert_lst_{idx}"] = True
+                                st.rerun()
+                        if st.session_state.pop(f"rsnerr_lst_{idx}", False):
+                            st.warning("⚠️ 请先填写原因再确认")
+                    elif new_status != status:
+                        _apply_status_change(rec, new_status)
+                        st.session_state["_status_change_msg"] = f"✅ 「{name}」已改为 {new_status}"
+                        st.rerun()
 
                     # 单条刷新处理
                     if do_refresh:
@@ -2056,31 +2263,77 @@ with tab_settings:
 
     new_threshold = st.slider("评分阈值（低于此分不展示）", 0, 100, config["score_threshold"], step=5)
 
-    # 评分权重
+    # 挖掘强度（第二期：决定一次能挖多少人）
+    st.markdown("")
+    st.markdown("#### ⚡ 挖掘强度（决定一次能挖多少人）")
+    _RPK_LABELS = ["50 条（省配额）", "100 条（推荐，数量×2）", "150 条（最大量）"]
+    _RPK_VALUES = {"50 条（省配额）": 50, "100 条（推荐，数量×2）": 100, "150 条（最大量）": 150}
+    _rpk_now = int(config.get("results_per_keyword", 100))
+    _rpk_idx = list(_RPK_VALUES.values()).index(_rpk_now) if _rpk_now in _RPK_VALUES.values() else 1
+    rpk_label = st.selectbox(
+        "每个关键词抓多少候选视频",
+        _RPK_LABELS, index=_rpk_idx,
+        help="YouTube 每页固定 50 条：选 100 条就是翻 2 页，数量翻倍，配额消耗也翻倍",
+    )
+    new_results_per_keyword = _RPK_VALUES[rpk_label]
+
+    new_shorts_mode = st.toggle(
+        "Shorts 专项搜索", value=bool(config.get("shorts_mode", True)),
+        help="额外搜一遍短视频，专捞只做 Shorts 的小博主（每个关键词 +100 配额）",
+    )
+    new_dual_order = st.toggle(
+        "双排序搜索（时间＋相关性各搜一遍）", value=bool(config.get("dual_order", False)),
+        help="同一个词按两种排序各搜一遍，能挖到更多不同类型的频道（每个关键词 +100 配额）",
+    )
+    new_window = st.number_input(
+        "搜索时间窗（近N天发布的视频）", min_value=7, max_value=365,
+        value=int(config.get("window_days", 60)), step=30,
+        help="窗口越大挖到的人越多，不额外花配额。60天=只看最近两个月更新的",
+    )
+    _cost_hint = estimate_search_cost({
+        "results_per_keyword": new_results_per_keyword,
+        "shorts_mode": new_shorts_mode,
+        "dual_order": new_dual_order,
+    })
+    st.caption(f"💸 按当前设置，每个关键词搜索约 {_cost_hint} 配额（不含验证，每频道约2-3）· 每天免费 10,000")
+
+    # 评分权重（第二期：四维加权，种草关键词退役）
     st.markdown("")
     st.markdown("#### ⚖️ 评分权重（总分100）")
-    weights = config["weights"]
-    col_w1, col_w2, col_w3 = st.columns(3)
+    if ai_ready():
+        st.caption(f"🤖 AI分析已配置（{DASHSCOPE_MODEL}）：挖掘完成后自动判定垂类、打相关度、出标签")
+    else:
+        st.caption("🤖 AI分析未配置：挖掘照常可用，垂类相关度按中性50分计")
+    weights = {**DEFAULT_CONFIG["weights"], **config.get("weights", {})}
+    col_w1, col_w2 = st.columns(2)
     with col_w1:
-        w_vert = st.slider("内容垂直度", 0, 40, weights["verticality"])
-        w_comm = st.slider("商业化历史", 0, 40, weights["commercial"])
+        w_rel = st.slider("垂类相关度（AI判定）", 0, 60, weights.get("relevance", 50),
+                          help="AI 看博主内容跟我们货品的契合度。这一维占大头，最高可调到60")
+        w_data = st.slider("数据健康度", 0, 40, weights.get("data_health", 20),
+                           help="播/订比（按近10条中位数算，不怕爆款拉飞）")
     with col_w2:
-        w_data = st.slider("数据健康度", 0, 40, weights["data_health"])
-        w_freq = st.slider("更新频率", 0, 40, weights["frequency"])
-    with col_w3:
-        w_kw = st.slider("种草关键词", 0, 40, weights["keywords"])
+        w_freq = st.slider("活跃度（更新频率）", 0, 40, weights.get("frequency", 15),
+                           help="近30天更新条数，≥4条拿满")
+        w_comm = st.slider("商业化历史", 0, 40, weights.get("commercial", 15),
+                           help="有没有接过广告/带过货。小博主普遍为0，权重别太高")
 
-    total_w = w_vert + w_comm + w_data + w_freq + w_kw
+    total_w = w_rel + w_data + w_freq + w_comm
     if total_w != 100:
         st.warning(f"⚠️ 当前权重总和 = {total_w}，建议调整为100")
     else:
         st.success(f"✅ 权重总和 = 100")
 
+    new_ai_gate = st.slider(
+        "AI相关度红线（低于此分进待定区）", 0, 80,
+        int(config.get("ai_min_relevance", 40)), step=5,
+        help="AI 判定相关度低于这条线的博主不进主列表，收进待定区人工翻（防挖偏的小保险）。拖到 0 = 关闭这条线",
+    )
+
     # 去重规则
     st.markdown("")
     st.markdown("#### 🔁 去重规则（多少天后重新出现）")
     rules = config["dedup_rules"]
-    col_d1, col_d2, col_d3, col_d4 = st.columns(4)
+    col_d1, col_d2, col_d3, col_d4, col_d5 = st.columns(5)
     with col_d1:
         d_onboard = st.number_input("已引入（-1=永久）", value=rules["onboarded_days"], step=1)
     with col_d2:
@@ -2089,6 +2342,9 @@ with tab_settings:
         d_email = st.number_input("已发邮件（天）", value=rules["emailed_days"], step=1)
     with col_d4:
         d_discover = st.number_input("新发现（天）", value=rules["discovered_days"], step=1)
+    with col_d5:
+        d_elim = st.number_input("已淘汰（天）", value=rules.get("eliminated_days", 90), step=30,
+                                 help="被淘汰的博主过这么多天后可以重新被挖到（-1=永久不再出现）")
 
     # 保存按钮
     st.markdown("")
@@ -2098,13 +2354,20 @@ with tab_settings:
             "max_subs": new_max,
             "days_active": new_days,
             "score_threshold": new_threshold,
+            # 挖掘强度（第二期新增）
+            "results_per_keyword": new_results_per_keyword,
+            "shorts_mode": new_shorts_mode,
+            "dual_order": new_dual_order,
+            "window_days": new_window,
             "weights": {
-                "verticality": w_vert, "commercial": w_comm,
-                "data_health": w_data, "frequency": w_freq, "keywords": w_kw,
+                "relevance": w_rel, "data_health": w_data,
+                "frequency": w_freq, "commercial": w_comm,
             },
+            "ai_min_relevance": new_ai_gate,
             "dedup_rules": {
                 "onboarded_days": d_onboard, "rejected_days": d_reject,
                 "emailed_days": d_email, "discovered_days": d_discover,
+                "eliminated_days": d_elim,
             },
             # BD邮件身份在左侧身份栏维护，这里原样保留，避免保存评分设置时丢失
             "sender_name": st.session_state.config.get("sender_name", ""),

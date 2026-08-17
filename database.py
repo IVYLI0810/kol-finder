@@ -212,7 +212,14 @@ class InfluencerDB:
             "view_sub_ratio": channel_data.get("view_sub_ratio", 0),
             "last_upload": channel_data.get("last_upload", ""),
             "score_total": channel_data.get("scores", {}).get("total", 0),
-            "score_detail": str(channel_data.get("scores", {})),
+            # 第二期：评分明细 + AI 分析结果（垂类/相关度/标签）一起存档，信息不丢
+            "score_detail": json.dumps({
+                "scores": channel_data.get("scores", {}),
+                "ai_category": channel_data.get("ai_category", ""),
+                "ai_relevance": channel_data.get("ai_relevance", ""),
+                "ai_tags": channel_data.get("ai_tags", []),
+                "ai_analyzed": channel_data.get("ai_analyzed", False),
+            }, ensure_ascii=False),
             "emails": ", ".join(channel_data.get("emails", [])),
             "has_commercial": channel_data.get("commercial_history", {}).get("has_commercial", False),
             "commercial_evidence": ", ".join(channel_data.get("commercial_history", {}).get("evidence", [])),
