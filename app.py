@@ -234,6 +234,19 @@ st.markdown("""
     /* ---------- 列表模式：一行一个博主（窄表格行 · 内容上下居中）----------
        原理同卡片：行容器内第一个元素是隐藏的 .kol-row-marker */
     .kol-row-marker { display: none; }
+    /* ---------- 关键词分组行：白胶囊=未选中 / 黑胶囊=选中（同顶部Tab语言） ---------- */
+    .kwgroup-marker { display: none; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kwgroup-marker) .stButton button[data-testid="stBaseButton-primary"] {
+        width: 100% !important; height: 44px !important; min-height: 44px !important;
+        border-radius: 999px !important; padding: 0 10px !important;
+        background: #1c1c1e !important; color: #fff !important;
+    }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kwgroup-marker) .stButton button:not([data-testid="stBaseButton-primary"]) {
+        background: #fff !important; color: #1c1c1e !important;
+    }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kwgroup-marker) .stButton button:not([data-testid="stBaseButton-primary"]):hover {
+        background: #ffd9e3 !important; color: #1c1c1e !important;
+    }
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) {
         background: #fffdf7;
         border: 2.5px solid #1c1c1e; border-radius: 12px;
@@ -1242,19 +1255,30 @@ with tab_search:
     if not st.session_state.api_key:
         st.info("👈 请先在左侧填入 YouTube API Key")
     else:
-        # ---------- 推荐关键词 · 一键点选 ----------
+        # ---------- 推荐关键词 · 两级简化版 ----------
         # 第二期起取消了"先选垂类"：点任意关键词直接搜，挖到的博主由 AI 自动判定垂类和相关度
-        st.markdown("✨ **推荐关键词** · 点击任意一个直接搜索（博主的垂类由 AI 自动判定，不用手选）")
-        for group_name, group_kws in KW_LIB.items():
-            st.caption(f"🗂 {group_name}")
-            for row_start in range(0, len(group_kws), 3):
-                chip_cols = st.columns(3)
-                for j, kw in enumerate(group_kws[row_start:row_start + 3]):
-                    with chip_cols[j]:
-                        if st.button(kw, key=f"kwchip_{group_name}_{row_start + j}",
-                                     use_container_width=True):
-                            st.session_state.pending_kw = kw
-
+        # 简化：顶行只放 6 个分组按钮，点哪个组才展开哪组的关键词，避免满屏按钮
+        if "kw_group" not in st.session_state or st.session_state.kw_group not in KW_LIB:
+            st.session_state.kw_group = next(iter(KW_LIB))
+        st.markdown("✨ **推荐关键词** · 先选分组，再点关键词直接搜索（博主的垂类由 AI 自动判定，不用手选）")
+        _group_names = list(KW_LIB.keys())
+        with st.container():
+            st.markdown('<div class="kwgroup-marker"></div>', unsafe_allow_html=True)
+            _gcols = st.columns(len(_group_names))
+            for _gi, _g in enumerate(_group_names):
+                with _gcols[_gi]:
+                    if st.button(_g, key=f"kwgroup_{_g}", use_container_width=True,
+                                 type="primary" if _g == st.session_state.kw_group else "secondary"):
+                        st.session_state.kw_group = _g
+        _sel_kws = KW_LIB[st.session_state.kw_group]
+        st.caption(f"🗂 {st.session_state.kw_group} · 点任意一个直接搜索")
+        for row_start in range(0, len(_sel_kws), 3):
+            chip_cols = st.columns(3)
+            for j, kw in enumerate(_sel_kws[row_start:row_start + 3]):
+                with chip_cols[j]:
+                    if st.button(kw, key=f"kwchip_{st.session_state.kw_group}_{row_start + j}",
+                                 use_container_width=True):
+                        st.session_state.pending_kw = kw
         st.markdown("")
 
         # ---------- 搜索模式：按时间（小博主多）/ 按相关性（更对口） ----------
