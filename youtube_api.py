@@ -7,6 +7,7 @@ import requests
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit, parse_qs, quote, unquote
 
 # ============================================================
 # 配额管理
@@ -310,51 +311,242 @@ def get_channels(channel_ids: list[str], api_key: str, quota: QuotaTracker) -> d
     return results
 
 
+_UC_ID_RE = re.compile(r'^UC[A-Za-z0-9_-]{22}$')
+_VIDEO_ID_RE = re.compile(r'^[A-Za-z0-9_-]{11}$')
+_HANDLE_CHARS_RE = re.compile(r'^[A-Za-z0-9._-]{3,30}$')
+
+
+def _clean_line(raw) -> str:
+    """清洗一行输入：去空白/引号/尖括号，剥 Excel HYPERLINK 公式和 Markdown 链接外壳。"""
+    s = str(raw).strip().strip('"\'').strip().strip('<>').strip()
+    m = re.search(r'HYPERLINK\(\s*"([^"]+)"', s, re.IGNORECASE)
+    if m:
+        s = m.group(1).strip()
+    m = re.search(r'\[[^\]]*\]\(\s*(https?://[^)\s]+)\s*\)', s)
+    if m:
+        s = m.group(1).strip()
+    return s
+
+
+def _is_youtube_host(host: str) -> bool:
+    host = host.lower().split(':')[0]
+    return host == 'youtu.be' or 'youtube' in host
+
+
+def _classify_youtube_input(raw) -> tuple[str, str]:
+    """把任意一行输入归类（纯逻辑，不联网）。
+    返回 (kind, value)，kind ∈
+      channel_id   → value=UC频道ID（裸ID、/channel/UC…链接，含 m./music./studio. 前缀、子页面、带参数）
+      handle       → value=@xxx（裸写@handle、youtube.com/@xxx 及各子页面/参数形式）
+      username     → value=用户名（老式 /user/xxx 链接）
+      custom       → value=名称（老式 /c/xxx 链接，或 youtube.com/裸名字 单段路径）
+      video_id     → value=11位视频ID（watch?v= / youtu.be / /shorts / /live / /embed / /v/）
+      unknown_token→ value=纯文本（无域名无@，按 handle 碰运气反查）
+      invalid      → 播放列表/搜索页/邮箱/空行等非频道输入
+    """
+    s = _clean_line(raw)
+    if not s:
+        return ("empty", "")
+
+    # 纯频道ID
+    if _UC_ID_RE.match(s):
+        return ("channel_id", s)
+    # 纯 @handle
+    if s.startswith('@') and _HANDLE_CHARS_RE.match(s[1:]):
+        return ("handle", s)
+
+    # 是不是链接（可能没写 https://）
+    low = s.lower()
+    url = None
+    if re.match(r'^https?://', low):
+        url = s
+    elif ('youtube' in low or 'youtu.be' in low) and '.' in low and ' ' not in s:
+        url = 'https://' + s
+
+    if url:
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return ("invalid", s)
+        host = parts.netloc.lower()
+        if not _is_youtube_host(host):
+            return ("invalid", s)
+        path = parts.path or '/'
+        query = parse_qs(parts.query)
+
+        # /channel/UC…（可能带 /videos、/about 等子页面）
+        m = re.search(r'/channel/(UC[A-Za-z0-9_-]{22})', path)
+        if m:
+            return ("channel_id", m.group(1))
+        # /@handle（可能带子页面）
+        m = re.match(r'^/@([A-Za-z0-9._-]+)', path)
+        if m:
+            return ("handle", '@' + m.group(1))
+        # 老式 /user/用户名
+        m = re.match(r'^/user/([^/?#]+)', path)
+        if m:
+            return ("username", unquote(m.group(1)))
+        # 老式 /c/自定义名
+        m = re.match(r'^/c/([^/?#]+)', path)
+        if m:
+            return ("custom", unquote(m.group(1)))
+        # youtu.be/视频ID
+        if host.split(':')[0] == 'youtu.be':
+            seg = path.lstrip('/').split('/')[0]
+            if _VIDEO_ID_RE.match(seg):
+                return ("video_id", seg)
+        # watch?v=视频ID
+        if path.rstrip('/') in ('/watch', '') and 'v' in query:
+            v = query['v'][0]
+            if _VIDEO_ID_RE.match(v):
+                return ("video_id", v)
+        # /shorts、/live、/embed、/v/ 视频ID
+        m = re.match(r'^/(?:shorts|live|embed|v)/([A-Za-z0-9_-]{11})', path)
+        if m:
+            return ("video_id", m.group(1))
+        # 播放列表、搜索页：明确不是频道
+        if path.startswith('/playlist') or path.startswith('/results'):
+            return ("invalid", s)
+        # 单段裸路径（youtube.com/某名字）：按自定义名处理
+        segs = [x for x in path.split('/') if x]
+        if len(segs) == 1 and re.match(r'^[A-Za-z0-9._-]+$', segs[0]):
+            return ("custom", unquote(segs[0]))
+        return ("invalid", s)
+
+    # 非链接的纯文本：handle 风格的词碰运气反查；含@的（邮箱等）直接判非频道
+    if re.match(r'^[A-Za-z0-9._-]+$', s):
+        return ("unknown_token", s)
+    return ("invalid", s)
+
+
+def _fetch_channel_id_from_html(url: str):
+    """兜底：直接抓频道页 HTML 提取频道ID（老式 /c/ 链接 API 查不到时用）。失败返回 None。"""
+    try:
+        r = requests.get(url, timeout=8, allow_redirects=True, headers={
+            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"),
+            "Accept-Language": "ko,en;q=0.8",
+        })
+        if r.status_code != 200:
+            return None
+        html = r.text
+        for pat in (r'"channelId":"(UC[A-Za-z0-9_-]{22})"',
+                    r'"browseId":"(UC[A-Za-z0-9_-]{22})"',
+                    r'/channel/(UC[A-Za-z0-9_-]{22})'):
+            m = re.search(pat, html)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_handle(handle: str, api_key: str, quota: QuotaTracker):
+    """官方 forHandle 反查频道ID，1 unit/个。"""
+    data = _get(f"{BASE_URL}/channels", {"part": "id", "forHandle": handle},
+                api_key, quota, 1, f"解析{handle}")
+    items = data.get("items", []) if data else []
+    return items[0]["id"] if items else None
+
+
+def _resolve_username(name: str, api_key: str, quota: QuotaTracker):
+    """老式用户名 forUsername 反查，1 unit/个。"""
+    data = _get(f"{BASE_URL}/channels", {"part": "id", "forUsername": name},
+                api_key, quota, 1, f"解析用户名{name}")
+    items = data.get("items", []) if data else []
+    return items[0]["id"] if items else None
+
+
+def _resolve_custom(name: str, api_key: str, quota: QuotaTracker):
+    """老式 /c/ 自定义名：先按 handle 碰运气，再抓网页兜底。"""
+    cid = _resolve_handle('@' + name, api_key, quota)
+    if cid:
+        return cid
+    quoted = quote(name)
+    for url in (f"https://www.youtube.com/c/{quoted}", f"https://www.youtube.com/{quoted}"):
+        cid = _fetch_channel_id_from_html(url)
+        if cid:
+            return cid
+    return None
+
+
 def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -> tuple[list[str], list[str]]:
     """
-    把混合输入统一解析成有效的 UC 频道ID。
-    支持：UC频道ID / /channel/UC... 链接 / @handle（裸写或 youtube.com/@xxx 链接）。
-    @handle 通过官方 forHandle 接口反查频道ID，消耗 1 unit/个。
-    返回：(去重后的有效频道ID列表, 无法解析的原始行列表)
+    把混合输入统一解析成有效的 UC 频道ID（全格式版）。
+    支持：UC频道ID / /channel/UC… / @handle（裸写或链接）/ 老式 /user/ 与 /c/ 链接 /
+    youtube.com/裸名字 / 视频链接（watch、youtu.be、Shorts、直播、embed，自动反查所属频道）/
+    m.、music.、studio. 子域名 / 带任意参数与子页面 / Excel超链接公式。
+    返回：(按输入顺序去重后的有效频道ID列表, 无法解析的原始行列表)
     """
-    valid = []
+    tasks = []   # (序号, kind, value, 原始行)
     failed_lines = []
-    for raw in raw_ids:
-        rid = str(raw).strip()
-        if not rid:
+    for i, raw in enumerate(raw_ids):
+        kind, value = _classify_youtube_input(raw)
+        if kind == "empty":
             continue
-        # 1) 直接就是频道ID
-        if rid.startswith("UC") and len(rid) == 24:
-            valid.append(rid)
+        if kind == "invalid":
+            failed_lines.append(_clean_line(raw))
             continue
-        # 2) /channel/UC... 链接里提取
-        m = re.search(r'/channel/(UC[\w-]+)', rid)
-        if m:
-            valid.append(m.group(1))
-            continue
-        # 3) @handle（裸写，或链接里的 youtube.com/@xxx）
-        m = re.search(r'@([\w.\-]+)', rid)
-        if m:
-            handle = m.group(1)
-            params = {"part": "id", "forHandle": "@" + handle}
-            data = _get(f"{BASE_URL}/channels", params, api_key, quota, 1, f"解析@{handle}")
-            items = data.get("items", []) if data else []
-            if items:
-                valid.append(items[0]["id"])
-            else:
-                failed_lines.append(rid)
-            continue
-        # 4) 其他格式（视频链接等）无法识别
-        failed_lines.append(rid)
+        if kind == "unknown_token":
+            kind, value = "handle", '@' + value
+        tasks.append((i, kind, value, str(raw).strip()))
 
-    # 去重（保持顺序）
+    results = {}   # 序号 → 频道ID
+
+    # 频道ID：直接有效，零消耗
+    for i, kind, value, _raw in tasks:
+        if kind == "channel_id":
+            results[i] = value
+
+    # handle：逐个 forHandle 反查（1 unit/个）
+    for i, kind, value, _raw in tasks:
+        if kind == "handle":
+            cid = _resolve_handle(value, api_key, quota)
+            if cid:
+                results[i] = cid
+
+    # 老式用户名
+    for i, kind, value, _raw in tasks:
+        if kind == "username":
+            cid = _resolve_username(value, api_key, quota)
+            if cid:
+                results[i] = cid
+
+    # 老式自定义名 / 裸名字
+    for i, kind, value, _raw in tasks:
+        if kind == "custom":
+            cid = _resolve_custom(value, api_key, quota)
+            if cid:
+                results[i] = cid
+
+    # 视频链接：50个一批反查所属频道（1 unit/批）
+    video_tasks = [(i, value) for i, kind, value, _raw in tasks if kind == "video_id"]
+    vid2channel = {}
+    for start in range(0, len(video_tasks), 50):
+        chunk = video_tasks[start:start + 50]
+        data = _get(f"{BASE_URL}/videos",
+                    {"part": "snippet", "id": ",".join(v for _i, v in chunk)},
+                    api_key, quota, 1, f"反查{len(chunk)}个视频所属频道")
+        if data:
+            for item in data.get("items", []):
+                vid2channel[item.get("id", "")] = item.get("snippet", {}).get("channelId", "")
+    for i, value in video_tasks:
+        cid = vid2channel.get(value)
+        if cid:
+            results[i] = cid
+
+    # 按输入顺序收集、去重
+    valid = []
     seen = set()
-    ordered = []
-    for v in valid:
-        if v not in seen:
-            seen.add(v)
-            ordered.append(v)
-    return ordered, failed_lines
+    for i, kind, value, raw in tasks:
+        cid = results.get(i)
+        if cid and cid not in seen:
+            seen.add(cid)
+            valid.append(cid)
+        elif not cid:
+            failed_lines.append(raw)
+
+    return valid, failed_lines
 
 
 # ============================================================

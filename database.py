@@ -317,8 +317,8 @@ class InfluencerDB:
 
         result = {"success": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
-        # 先把混合格式（UC ID / @handle / 链接）统一解析成频道ID
-        # 无法识别的行（如视频链接）计入 failed 并记录原文，不再静默吞掉
+        # 先把混合格式（UC ID / @handle / 各种链接 / 视频链接）统一解析成频道ID
+        # 实在无法识别的行计入 failed 并记录原文，不再静默吞掉
         resolved_ids, unresolvable = resolve_channel_ids(channel_ids, api_key, quota)
         result["failed"] += len(unresolvable)
         result["failed_lines"] = list(unresolvable)

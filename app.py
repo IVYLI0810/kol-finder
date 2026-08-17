@@ -2259,14 +2259,18 @@ with tab_database:
 
 with tab_import:
     st.markdown("### 批量导入已有合作博主")
-    st.markdown("把频道主页链接或频道ID粘贴进来，导入后搜索时会自动跳过这些人。")
+    st.markdown("把 YouTube 链接或频道ID粘贴进来，导入后搜索时会自动跳过这些人。")
     st.markdown("")
 
-    st.markdown("**支持的格式（每行一个）：**")
-    st.code("""https://www.youtube.com/channel/UCxxxxxxxxxxxx
-https://www.youtube.com/@频道名
-@频道名
-UCxxxxxxxxxxxx""", language=None)
+    st.markdown("**什么格式都行，每行一个：**")
+    st.code("""https://www.youtube.com/@handle          ← 主页链接（最常见）
+https://www.youtube.com/channel/UCxxxx…  ← 频道ID链接
+https://www.youtube.com/user/xxx         ← 老式用户名链接
+https://www.youtube.com/c/xxx            ← 老式自定义链接
+https://www.youtube.com/shorts/xxxx      ← 视频/Shorts链接，自动找到所属频道
+https://youtu.be/xxxx                    ← 视频分享链接，同上
+@handle / UCxxxx…                        ← 只粘贴这个也行""", language=None)
+    st.caption("带参数（?si=…、?sub_confirmation=1）、带 /videos 等子页面、m./music. 开头都能自动识别；视频链接会自动反查它属于哪个频道。")
     st.markdown("")
 
     import_text = st.text_area(
