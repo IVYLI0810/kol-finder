@@ -340,6 +340,53 @@ def analyze_channels(channels: list[dict], status_cb=None,
 
 
 # ============================================================
+# AI 生成搜索关键词（给一个垂类，产出韩语YouTube搜索词）
+# ============================================================
+
+def generate_keywords(vertical: str, count: int = 9, timeout: int = 60) -> tuple[list, str]:
+    """根据用户给的垂类，让 AI 生成韩语 YouTube 搜索关键词。
+
+    返回 (关键词列表, 错误信息)；成功时错误信息为空字符串。
+    AI 失败不阻塞：调用方拿到空列表+错误文案，界面提示即可。
+    """
+    vertical = (vertical or "").strip()
+    if not vertical:
+        return [], "请先输入一个垂类，比如：家居收纳"
+    if not ai_ready():
+        return [], "AI未配置（本地 ai_config_local.py 或云上 Secrets 缺 DASHSCOPE_API_KEY）"
+
+    prompt = f"""你是韩国YouTube搜索词专家，服务AliExpress韩国站的网红挖掘团队。
+
+任务：围绕垂类「{vertical}」，生成 {count} 个韩语YouTube搜索关键词，用来搜出这个垂类里的个人中小博主（适合带货种草合作的）。
+
+要求：
+1. 每个关键词是韩国人真会在YouTube搜的短语，2-5个词，像「자취방 꾸미기 가성비」「다이소 수납템」这种风格
+2. 偏向个人创作者内容（日常vlog、开箱haul、测评、教程、好物推荐），避开品牌名/官方频道词/明星名
+3. 覆盖不同角度：场景词、人群词、好物词、平价词、教程词等，互相别重复
+4. 只输出JSON字符串数组，不要任何其他文字，例如：["자취방 꾸미기 가성비", "다이소 수납템"]"""
+
+    content, err = _call_qwen(prompt, timeout=timeout)
+    if err:
+        return [], err
+    arr = _extract_json_array(content)
+    if not arr:
+        return [], "AI回复无法解析，请重试一次"
+    kws, seen = [], set()
+    for item in arr:
+        if not isinstance(item, str):
+            continue
+        kw = item.strip().strip('"').strip()
+        if kw and kw not in seen and not kw.startswith("["):
+            seen.add(kw)
+            kws.append(kw)
+        if len(kws) >= max(6, count):
+            break
+    if not kws:
+        return [], "AI没给出可用关键词，请换个说法重试"
+    return kws, ""
+
+
+# ============================================================
 # 离线自测（python3 ai_analyzer.py）
 # ============================================================
 if __name__ == "__main__":

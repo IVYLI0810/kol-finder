@@ -19,7 +19,7 @@ from youtube_api import (
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
     split_main_pending,
 )
-from ai_analyzer import analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL
+from ai_analyzer import analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL, generate_keywords
 
 # ============================================================
 # 团队公共库配置（写死在代码里，所有人共用，不用每次填）
@@ -1255,30 +1255,59 @@ with tab_search:
     if not st.session_state.api_key:
         st.info("👈 请先在左侧填入 YouTube API Key")
     else:
-        # ---------- 推荐关键词 · 两级简化版 ----------
+        # ---------- AI 生成关键词：给个垂类，AI 现写韩语搜索词 ----------
+        st.markdown("✨ **AI 生成关键词** · 告诉它想挖的垂类，自动产出韩语搜索词（点任意一个直接搜索）")
+        _gc1, _gc2 = st.columns([4, 1])
+        with _gc1:
+            _ai_vertical = st.text_input(
+                "垂类", key="ai_vertical_input", label_visibility="collapsed",
+                placeholder="输入垂类，例：家居收纳 / 美甲 / 露营装备 / 文具",
+            )
+        with _gc2:
+            _gen_btn = st.button("✨ 生成关键词", use_container_width=True)
+        if _gen_btn:
+            if not _ai_vertical.strip():
+                st.warning("先输入一个想挖的垂类，比如：家居收纳")
+            else:
+                with st.spinner(f"🤖 AI 正在围绕「{_ai_vertical.strip()}」想搜索词…"):
+                    _gen_kws, _gen_err = generate_keywords(_ai_vertical)
+                if _gen_err:
+                    st.error(f"😅 生成失败：{_gen_err}（下面预置关键词组照常可用）")
+                else:
+                    st.session_state.ai_kws = _gen_kws
+                    st.session_state.ai_kws_for = _ai_vertical.strip()
+        if st.session_state.get("ai_kws"):
+            st.caption(f"🤖 根据「{st.session_state.get('ai_kws_for', '')}」生成 · 点任意一个直接搜索，⚡批量会挖这一组")
+            for row_start in range(0, len(st.session_state.ai_kws), 3):
+                chip_cols = st.columns(3)
+                for j, kw in enumerate(st.session_state.ai_kws[row_start:row_start + 3]):
+                    with chip_cols[j]:
+                        if st.button(kw, key=f"aikw_{row_start + j}", use_container_width=True):
+                            st.session_state.pending_kw = kw
+
+        # ---------- 预置关键词组（折叠，保持页面简洁） ----------
         # 第二期起取消了"先选垂类"：点任意关键词直接搜，挖到的博主由 AI 自动判定垂类和相关度
-        # 简化：顶行只放 6 个分组按钮，点哪个组才展开哪组的关键词，避免满屏按钮
         if "kw_group" not in st.session_state or st.session_state.kw_group not in KW_LIB:
             st.session_state.kw_group = next(iter(KW_LIB))
-        st.markdown("✨ **推荐关键词** · 先选分组，再点关键词直接搜索（博主的垂类由 AI 自动判定，不用手选）")
-        _group_names = list(KW_LIB.keys())
-        with st.container():
-            st.markdown('<div class="kwgroup-marker"></div>', unsafe_allow_html=True)
-            _gcols = st.columns(len(_group_names))
-            for _gi, _g in enumerate(_group_names):
-                with _gcols[_gi]:
-                    if st.button(_g, key=f"kwgroup_{_g}", use_container_width=True,
-                                 type="primary" if _g == st.session_state.kw_group else "secondary"):
-                        st.session_state.kw_group = _g
-        _sel_kws = KW_LIB[st.session_state.kw_group]
-        st.caption(f"🗂 {st.session_state.kw_group} · 点任意一个直接搜索")
-        for row_start in range(0, len(_sel_kws), 3):
-            chip_cols = st.columns(3)
-            for j, kw in enumerate(_sel_kws[row_start:row_start + 3]):
-                with chip_cols[j]:
-                    if st.button(kw, key=f"kwchip_{st.session_state.kw_group}_{row_start + j}",
-                                 use_container_width=True):
-                        st.session_state.pending_kw = kw
+        with st.expander("📚 现成关键词组（6 组实战验证过的）· 点开选用", expanded=False):
+            _group_names = list(KW_LIB.keys())
+            with st.container():
+                st.markdown('<div class="kwgroup-marker"></div>', unsafe_allow_html=True)
+                _gcols = st.columns(len(_group_names))
+                for _gi, _g in enumerate(_group_names):
+                    with _gcols[_gi]:
+                        if st.button(_g, key=f"kwgroup_{_g}", use_container_width=True,
+                                     type="primary" if _g == st.session_state.kw_group else "secondary"):
+                            st.session_state.kw_group = _g
+            _sel_kws = KW_LIB[st.session_state.kw_group]
+            st.caption(f"🗂 {st.session_state.kw_group} · 点任意一个直接搜索")
+            for row_start in range(0, len(_sel_kws), 3):
+                chip_cols = st.columns(3)
+                for j, kw in enumerate(_sel_kws[row_start:row_start + 3]):
+                    with chip_cols[j]:
+                        if st.button(kw, key=f"kwchip_{st.session_state.kw_group}_{row_start + j}",
+                                     use_container_width=True):
+                            st.session_state.pending_kw = kw
         st.markdown("")
 
         # ---------- 搜索模式：按时间（小博主多）/ 按相关性（更对口） ----------
@@ -1305,7 +1334,7 @@ with tab_search:
             search_btn = st.button("🔍 搜索", use_container_width=True)
         with col3:
             batch_btn = st.button("⚡ 批量", use_container_width=True,
-                                  help="使用全部预置关键词依次搜索（配额消耗大，建议配额充足时用）")
+                                  help="有AI生成的关键词时，把生成的一组全挖一遍；没有则挖全部预置关键词（配额消耗大，建议配额充足时用）")
 
         st.markdown("")
 
@@ -1360,7 +1389,12 @@ with tab_search:
 
         # 批量搜索
         if batch_btn:
-            keywords = [kw for kws in KW_LIB.values() for kw in kws]
+            if st.session_state.get("ai_kws"):
+                keywords = list(st.session_state.ai_kws)
+                _batch_desc = f"AI生成的 {len(keywords)} 个关键词（「{st.session_state.get('ai_kws_for', '')}」）"
+            else:
+                keywords = [kw for kws in KW_LIB.values() for kw in kws]
+                _batch_desc = f"全部预置关键词 {len(keywords)} 个"
             all_results = []
             errors_seen = []
             st.session_state.quota.last_error = ""
@@ -1368,6 +1402,7 @@ with tab_search:
             per_kw_cost = estimate_search_cost(st.session_state.config) + 150
             progress = st.progress(0)
             status_text = st.empty()
+            status_text.info(f"⚡ 开始批量挖掘：{_batch_desc}")
 
             for i, kw in enumerate(keywords):
                 if not st.session_state.quota.can_afford(per_kw_cost):
