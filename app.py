@@ -8,8 +8,12 @@ import pandas as pd
 import json
 import re
 import html as html_lib
+import base64
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from io import BytesIO
+
+import requests
 
 from streamlit_local_storage import LocalStorage
 
@@ -913,6 +917,35 @@ def bd_email_dialog(rec):
     st.code(body, language=None)
 
 
+# ---------- 缩略图服务端代理 ----------
+# 浏览器（尤其国内网络）常常直连不了 YouTube 图床 i.ytimg.com，
+# 改成服务器端下载、base64 内嵌到页面里；云上服务器在海外，必然可达。
+_THUMB_CACHE: dict = {}
+_THUMB_DEAD = False
+
+def _thumb_data_uris(urls: list) -> list:
+    global _THUMB_DEAD
+    if _THUMB_DEAD:
+        return [None for _ in urls]
+    todo = [u for u in urls if u and u not in _THUMB_CACHE]
+    if todo:
+        def _fetch(u):
+            for verify in (True, False):
+                try:
+                    r = requests.get(u, timeout=5, verify=verify)
+                    if r.status_code == 200 and r.content:
+                        return u, f"data:image/jpeg;base64,{base64.b64encode(r.content).decode()}"
+                except Exception:
+                    continue
+            return u, None
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for u, uri in ex.map(_fetch, todo):
+                _THUMB_CACHE[u] = uri
+        if all(_THUMB_CACHE.get(u) is None for u in todo):
+            _THUMB_DEAD = True  # 服务器也够不到图床，后续直接跳过，不拖慢页面
+    return [_THUMB_CACHE.get(u) for u in urls]
+
+
 def _render_result_card(ch: dict, rank: int, key_prefix: str):
     """渲染一张搜索结果卡片 + 操作按钮（主列表和待定区共用）。
     key_prefix 用于区分区域，避免按钮 key 冲突。"""
@@ -924,13 +957,17 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
     email_display = emails[0] if emails else "未公开"
     thumbnails = ch.get("recent_thumbnails", [])
 
-    # 缩略图HTML
+    # 缩略图HTML（服务器端下载内嵌，浏览器不用直连YouTube图床）
     thumb_html = ""
     if thumbnails:
         items = ""
-        for t in thumbnails[:2]:
-            items += f'<div class="thumb-item"><img src="{t["url"]}" alt="" loading="lazy" decoding="async"><span>{t["date"]}</span></div>'
-        thumb_html = f'<div class="thumb-row">{items}</div>'
+        _urls = _thumb_data_uris([t["url"] for t in thumbnails[:2]])
+        for t, _u in zip(thumbnails[:2], _urls):
+            if not _u:
+                continue
+            items += f'<div class="thumb-item"><img src="{_u}" alt="" loading="lazy" decoding="async"><span>{t["date"]}</span></div>'
+        if items:
+            thumb_html = f'<div class="thumb-row">{items}</div>'
 
     # 商业化标记
     comm_html = ""
