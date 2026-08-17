@@ -49,7 +49,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@700;800&display=swap');
+    /* 字体不引外部资源（国内连谷歌字体库会白屏等半天），用系统圆体栈 */
 
     /* ---------- 全局底色：纯色粉（卡通像素风 · 无毛玻璃无渐变） ---------- */
     .stApp {
@@ -65,7 +65,7 @@ st.markdown("""
     }
 
     h1, h2, h3, h4 {
-        font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        font-family: ui-rounded, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, sans-serif;
         color: #1c1c1e; font-weight: 800; letter-spacing: -0.01em;
     }
     p, span, div, label, td, th, a, li {
@@ -81,7 +81,7 @@ st.markdown("""
     }
     .app-hero .hero-title {
         font-size: 44px; font-weight: 800; color: #1c1c1e; margin: 0 0 10px;
-        font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        font-family: ui-rounded, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, sans-serif;
         letter-spacing: 1px; text-shadow: 4px 4px 0 #f5c542;
     }
     .app-hero .hero-sub { font-size: 16px; color: #a05c74; font-weight: 700; margin: 0; }
@@ -295,7 +295,7 @@ st.markdown("""
        必须用后代选择器（空格），用 > 会完全匹配不到！ ---------- */
     .stButton button, .stDownloadButton button {
         border-radius: 999px !important; height: 44px; padding: 0 26px;
-        font-weight: 800; font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        font-weight: 800; font-family: ui-rounded, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, sans-serif;
         border: 3px solid #1c1c1e !important;
         background: #1c1c1e !important;
         color: #fff !important;
@@ -336,7 +336,7 @@ st.markdown("""
     .stTabs [role="tab"] {
         flex: 1;
         border-radius: 999px !important; padding: 11px 0 !important;
-        font-weight: 800; font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        font-weight: 800; font-family: ui-rounded, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, sans-serif;
         background: #fff !important;
         color: #1c1c1e !important; border: 3px solid #1c1c1e !important;
         justify-content: center;
@@ -362,7 +362,7 @@ st.markdown("""
     div[data-testid="stMetricLabel"] { color: #a05c74; font-weight: 700; }
     div[data-testid="stMetricValue"] {
         color: #1c1c1e; font-weight: 800;
-        font-family: 'Baloo 2', -apple-system, 'PingFang SC', sans-serif;
+        font-family: ui-rounded, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, sans-serif;
     }
 
     /* ---------- 输入框/数字框：白底 + 黑描边 + 硬阴影 ---------- */
