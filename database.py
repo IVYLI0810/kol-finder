@@ -309,16 +309,19 @@ class InfluencerDB:
 
     def import_existing(self, channel_ids: list[str], api_key: str, quota,
                         status: str = "已发邮件", imported_by: str = "",
-                        line_dates: dict = None, update_existing: bool = False) -> dict:
+                        line_dates: dict = None, update_existing: bool = False,
+                        line_by: dict = None) -> dict:
         """
         导入已有网红名单（通过频道ID或链接）
         line_dates: 原始行文本（去掉日期后的链接部分）→ 发邮件日期（YYYY-MM-DD）
+        line_by: 链接 → 挖掘人（空着算导入操作人 imported_by）
         update_existing: 库里已有的博主是否顺便更新状态和发邮件日期
         返回：{"success": int, "updated": int, "skipped": int, "failed": int, "failed_lines": [str]}
         """
         from youtube_api import get_channels, resolve_channel_ids
 
         line_dates = line_dates or {}
+        line_by = line_by or {}
         result = {"success": 0, "updated": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
         # 先把混合格式（UC ID / @handle / 各种链接 / 视频链接）统一解析成频道ID
@@ -378,7 +381,7 @@ class InfluencerDB:
                 "thumbnails": "",
                 "status": status,
                 "status_date": now,
-                "discovered_by": imported_by,
+                "discovered_by": line_by.get(raw_by_id.get(cid, "")) or imported_by,
                 "email_sent_date": _sent_date_for(cid) if status == "已发邮件" else None,
                 "introduced_date": None,
                 "notes": "批量导入",

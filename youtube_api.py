@@ -353,13 +353,14 @@ def split_line_date(line: str) -> tuple:
 
 
 def parse_import_excel(f) -> tuple:
-    """读 Excel 导入名单，返回 (链接列表, 链接→发邮件日期)。
-    第1列=链接；第2列=发邮件日期（可空，Excel日期格/文本日期/20260801数字都认识）。
+    """读 Excel 导入名单，返回 (链接列表, 链接→发邮件日期, 链接→挖掘人)。
+    第1列=链接；第2列=发邮件日期（可空，Excel日期格/文本日期/20260801数字都认识）；
+    第3列=挖掘人（可空，空着算导入操作人）。
     也兼容「链接+日期」写在同一格；空行跳过，表头行（含 链接/link/频道/channel/url 等）自动跳过。
     """
     import pandas as pd
     df = pd.read_excel(f, header=None)
-    lines, dates = [], {}
+    lines, dates, bys = [], {}, {}
     for i, row in df.iterrows():
         raw = str(row.iloc[0]).strip() if len(row) > 0 else ""
         if not raw or raw.lower() in ("nan", "none"):
@@ -381,7 +382,33 @@ def parse_import_excel(f) -> tuple:
             lines.append(link)
             if d:
                 dates[link] = d
-    return lines, dates
+            if df.shape[1] >= 3:
+                s2 = str(row.iloc[2]).strip()
+                if s2.lower() not in ("", "nan", "none"):
+                    bys[link] = s2
+    return lines, dates, bys
+
+
+def split_line_meta(line: str) -> tuple:
+    """把粘贴的一行拆成 (链接, 发邮件日期或None, 挖掘人或None)。
+    链接后面的词：先是日期（能识别的话），再是挖掘人；没日期就直接写挖掘人也行。
+    例：'https://… 2026-08-01 艾薇李' → ('https://…', '2026-08-01', '艾薇李')
+    第一个词不像链接时（如Excel公式带逗号），按老规矩整行当链接，不拆挖掘人。
+    """
+    s = str(line).strip()
+    if not s:
+        return "", None, None
+    parts = re.split(r'[\s,，;；]+', s)
+    t0 = parts[0].lower()
+    looks_link = t0.startswith(("http://", "https://", "www.", "youtu.be/", "youtube.com/", "@", "uc", "m.youtube.", "music.youtube."))
+    if len(parts) == 1 or not looks_link:
+        link, d = split_line_date(s)
+        return link, d, None
+    toks = parts[1:]
+    d = _parse_date_token(toks[0])
+    by = " ".join(toks[1:]) if d else " ".join(toks)
+    by = by.strip(' \t,，;；').strip() or None
+    return parts[0], d, by
 
 
 def _clean_line(raw) -> str:

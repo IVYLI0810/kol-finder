@@ -21,7 +21,7 @@ from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
-    split_main_pending, split_line_date, parse_import_excel,
+    split_main_pending, split_line_date, split_line_meta, parse_import_excel,
 )
 from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL,
                          generate_keywords, generate_bd_email_ai)
@@ -2324,38 +2324,38 @@ with tab_import:
     st.markdown("把 YouTube 链接或频道ID粘贴进来，导入后搜索时会自动跳过这些人。")
     st.markdown("")
 
-    st.markdown("**每行一个：链接 + 空格 + 发邮件日期（日期可不写，不写按今天算）：**")
-    st.code("""https://www.youtube.com/@handle 2026-08-01   ← 链接 + 发邮件日期（推荐）
-https://www.youtube.com/@handle              ← 不写日期就按今天
-@handle 2026/7/15                            ← 只粘贴handle也行，日期格式随意
-https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语日期也认识""", language=None)
+    st.markdown("**每行一个：链接 + 空格 + 发邮件日期 + 空格 + 挖掘人（日期/挖掘人都可不写）：**")
+    st.code("""https://www.youtube.com/@handle 2026-08-01 艾薇李   ← 链接 + 日期 + 挖掘人
+https://www.youtube.com/@handle 2026-08-01        ← 不写挖掘人就算你的
+https://www.youtube.com/@handle                   ← 不写日期就按今天
+@handle 2026/7/15                                 ← 只粘贴handle也行，日期格式随意""", language=None)
     st.caption("链接什么格式都行：主页链接、/channel/UC…、老式 /user/ 和 /c/ 链接、视频/Shorts 链接（自动反查所属频道）、m./music. 开头、带参数（?si=…）都能识别。")
     st.markdown("")
 
     col_u1, col_u2 = st.columns([2, 1])
     with col_u1:
-        up_file = st.file_uploader("方式一：上传 Excel（第1列链接，第2列发邮件日期）", type=["xlsx", "xls"])
+        up_file = st.file_uploader("方式一：上传 Excel（第1列链接，第2列日期，第3列挖掘人）", type=["xlsx", "xls"])
     with col_u2:
         _tpl_buf = BytesIO()
         pd.DataFrame([
-            ["链接", "发邮件日期"],
-            ["https://www.youtube.com/@handle", "2026-08-01"],
-            ["https://www.youtube.com/@handle2", ""],
-            ["@handle3", "2026/7/15"],
+            ["链接", "发邮件日期", "挖掘人"],
+            ["https://www.youtube.com/@handle", "2026-08-01", "艾薇李"],
+            ["https://www.youtube.com/@handle2", "", ""],
+            ["@handle3", "2026/7/15", "小美"],
         ]).to_excel(_tpl_buf, index=False, engine="openpyxl")
         st.download_button(
             "📄 下载 Excel 模板", data=_tpl_buf.getvalue(),
             file_name="批量导入模板.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        st.caption("日期那列可空，空着按今天算")
+        st.caption("日期、挖掘人两列可空：日期空着按今天，挖掘人空着算你的")
 
-    up_lines, up_dates = [], {}
+    up_lines, up_dates, up_by = [], {}, {}
     if up_file is not None:
         try:
-            up_lines, up_dates = parse_import_excel(up_file)
+            up_lines, up_dates, up_by = parse_import_excel(up_file)
             if up_lines:
-                st.success(f"Excel 读到 {len(up_lines)} 个链接，其中 {len(up_dates)} 个带日期")
+                st.success(f"Excel 读到 {len(up_lines)} 个链接，其中 {len(up_dates)} 个带日期、{len(up_by)} 个带挖掘人")
             else:
                 st.warning("Excel 里没读到有效链接，看看是不是空表")
         except Exception:
@@ -2379,15 +2379,17 @@ https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语
     if st.button("📥 开始导入", use_container_width=True):
         # 数据来源：传了Excel就用Excel，否则用粘贴的文本
         if up_file is not None:
-            lines, line_dates = up_lines, up_dates
+            lines, line_dates, line_by = up_lines, up_dates, up_by
         else:
-            lines, line_dates = [], {}
+            lines, line_dates, line_by = [], {}, {}
             for rl in [l.strip() for l in import_text.strip().split("\n") if l.strip()]:
-                link, d = split_line_date(rl)
+                link, d, by = split_line_meta(rl)
                 if link:
                     lines.append(link)
                     if d:
                         line_dates[link] = d
+                    if by:
+                        line_by[link] = by
 
         if not lines:
             st.warning("没有可导入的链接：看看Excel内容，或先粘贴链接")
@@ -2402,6 +2404,7 @@ https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语
                         st.session_state.quota, status=import_status,
                         imported_by=st.session_state.user_name,
                         line_dates=line_dates, update_existing=update_existing,
+                        line_by=line_by,
                     )
                     parts = [f"新增 {result['success']}"]
                     if result.get("updated"):
@@ -2442,7 +2445,7 @@ https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语
                         info["status"] = import_status
                         info["status_date"] = now
                         info["email_sent_date"] = sent if import_status == "已发邮件" else None
-                        info["discovered_by"] = st.session_state.user_name
+                        info["discovered_by"] = line_by.get(raw_map.get(cid, "")) or st.session_state.user_name
                         info["notes"] = "批量导入"
                         st.session_state.local_db.append(info)
                         added += 1
