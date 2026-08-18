@@ -2462,6 +2462,34 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                             + "\n\n".join(f"· {line}" for line in bad_lines)
                         )
 
+    st.markdown("---")
+    with st.expander("🔄 一键补全旧数据（以前导入、缺播放/评分/邮箱的老记录）"):
+        st.caption(
+            "只动数据为空的老记录，已补全的不会重复动；YouTube 已删除的频道自动跳过。"
+            "几百个要点几分钟，跑的时候别关页面。"
+        )
+        if st.button("🔄 开始补全", use_container_width=True):
+            if not st.session_state.api_key:
+                st.error("需要先填 YouTube API Key")
+            else:
+                _db = get_db()
+                if not _db:
+                    st.warning("补全要连团队公共库，本地测试模式用不了")
+                else:
+                    _bar = st.progress(0.02, text="正在拉取库里数据…")
+                    _res = _db.backfill_sparse(
+                        st.session_state.api_key, st.session_state.quota,
+                        status_cb=lambda p, t: _bar.progress(p, text=t),
+                    )
+                    _bar.progress(1.0, text="补全完成")
+                    if _res["total"] == 0:
+                        st.success("✅ 库里没有等待补全的旧记录")
+                    else:
+                        st.success(
+                            f"✅ 补全完成：补好 {_res['done']} 个，"
+                            f"频道已消失跳过 {_res['gone']} 个，失败 {_res['failed']} 个"
+                        )
+
 
 # ============================================================
 # Tab 4: 筛选设置

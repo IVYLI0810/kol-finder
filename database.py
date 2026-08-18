@@ -446,6 +446,104 @@ class InfluencerDB:
         return result
 
     # ============================================================
+    # 旧数据一键补全
+    # ============================================================
+
+    def backfill_sparse(self, api_key: str, quota, status_cb=None, limit: int = 0) -> dict:
+        """
+        把库里评分明细为空的旧记录补全成和挖掘一样的全量数据（粉丝/播放/邮箱/评分/AI垂类）。
+        幂等：只碰 score_detail 为空的记录，补过的不再动；YouTube 已删除的频道自动跳过。
+        status_cb(pct, text) 用于页面进度条。limit>0 时只补前 limit 条（测试/限量用）。
+        返回 {"total", "done", "gone", "failed"}。
+        """
+        from youtube_api import get_channels, verify_channel, score_channel
+        from ai_analyzer import analyze_channels
+
+        def _say(pct, text):
+            if status_cb:
+                try:
+                    status_cb(pct, text)
+                except Exception:
+                    pass
+
+        rows = self.get_all()
+        sparse = [r for r in rows if not (r.get("score_detail") or "").strip().startswith("{")]
+        if limit:
+            sparse = sparse[:limit]
+        res = {"total": len(sparse), "done": 0, "gone": 0, "failed": 0}
+        if not sparse:
+            _say(1.0, "没有需要补全的记录")
+            return res
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _say(0.02, f"共 {res['total']} 个待补全，开始…")
+        CHUNK = 8
+        for i in range(0, len(sparse), CHUNK):
+            chunk = sparse[i:i + CHUNK]
+            cids = [r["channel_id"] for r in chunk]
+            try:
+                chs = get_channels(cids, api_key, quota)
+            except Exception:
+                chs = {}
+                res["failed"] += len(chunk)
+
+            enriched = []
+            for r in chunk:
+                info = chs.get(r["channel_id"])
+                if not info:
+                    res["gone"] += 1  # 频道已被 YouTube 删除/不存在
+                    continue
+                try:
+                    full = verify_channel(info, api_key, quota, allow_inactive=True) or info
+                except Exception:
+                    full = info
+                enriched.append((r, full))
+
+            if enriched:
+                dicts = [f for _, f in enriched]
+                try:
+                    analyze_channels(dicts)
+                except Exception:
+                    pass
+                for r, f in enriched:
+                    if f.get("ai_category"):
+                        f["category"] = f["ai_category"]
+                    try:
+                        f["scores"] = score_channel(f)
+                    except Exception:
+                        f["scores"] = {"total": 0}
+                    upd = {
+                        "category": f.get("category", ""),
+                        "subscribers": f.get("subscribers", 0),
+                        "avg_views_30d": f.get("avg_views_30d", 0),
+                        "view_sub_ratio": f.get("view_sub_ratio", 0),
+                        "last_upload": f.get("last_upload", ""),
+                        "score_total": f.get("scores", {}).get("total", 0),
+                        "score_detail": json.dumps({
+                            "scores": f.get("scores", {}),
+                            "ai_category": f.get("ai_category", ""),
+                            "ai_relevance": f.get("ai_relevance", ""),
+                            "ai_tags": f.get("ai_tags", []),
+                            "ai_analyzed": f.get("ai_analyzed", False),
+                        }, ensure_ascii=False),
+                        "emails": ", ".join(f.get("emails", [])),
+                        "has_commercial": f.get("commercial_history", {}).get("has_commercial", False),
+                        "commercial_evidence": ", ".join(f.get("commercial_history", {}).get("evidence", [])),
+                        "recent_titles": " / ".join(f.get("recent_titles", [])[:3]),
+                        "thumbnails": str(f.get("recent_thumbnails", [])),
+                        "last_checked": now,
+                    }
+                    try:
+                        self.client.table(self.TABLE_NAME).update(upd).eq("channel_id", r["channel_id"]).execute()
+                        res["done"] += 1
+                    except Exception:
+                        res["failed"] += 1
+
+            _say(min(0.99, (i + CHUNK) / len(sparse)),
+                 f"进度 {min(i + CHUNK, len(sparse))}/{len(sparse)} ｜ 已补 {res['done']} ｜ 消失 {res['gone']} ｜ 失败 {res['failed']}")
+        return res
+
+    # ============================================================
     # 删除
     # ============================================================
 
