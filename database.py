@@ -473,6 +473,17 @@ class InfluencerDB:
         except Exception:
             return False
 
+    def remove_members(self, names: list[str]) -> bool:
+        """删除成员名字（批量）"""
+        names = [str(n).strip() for n in (names or []) if str(n or "").strip()]
+        if not names:
+            return True
+        try:
+            self.client.table(self.MEMBERS_TABLE).delete().in_("name", names).execute()
+            return True
+        except Exception:
+            return False
+
     # ============================================================
     # 关键词库（可增删 · 全队共享）
     # ============================================================

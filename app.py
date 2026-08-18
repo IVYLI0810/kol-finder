@@ -1135,6 +1135,24 @@ with st.sidebar:
             st.session_state.user_name = chosen
             st.query_params["u"] = chosen
 
+    # ---------- 名单管理：删掉不用/写错的名字 ----------
+    if db_for_members and members:
+        with st.expander("🗑️ 删除名单里的名字"):
+            removable = [m for m in members if m != st.session_state.user_name]
+            if removable:
+                del_names = st.multiselect("选要删的名字（可多选）", removable, key="del_members")
+                if st.button("🗑️ 删除选中的名字", key="del_members_btn", use_container_width=True):
+                    if del_names:
+                        if db_for_members.remove_members(del_names):
+                            st.success(f"已删除：{' / '.join(del_names)}")
+                            st.rerun()
+                        else:
+                            st.error("删除失败，请稍后再试")
+                    else:
+                        st.warning("先勾选要删的名字")
+            else:
+                st.caption("没有其他名字可删（自己正在用的名字不能删）")
+
     if st.session_state.user_name and chosen == st.session_state.user_name:
         pass  # 名字已生效（下拉框会显示选中状态），不再额外弹问候框，保持侧边栏干净
 
