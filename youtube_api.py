@@ -352,6 +352,38 @@ def split_line_date(line: str) -> tuple:
     return s, None
 
 
+def parse_import_excel(f) -> tuple:
+    """读 Excel 导入名单，返回 (链接列表, 链接→发邮件日期)。
+    第1列=链接；第2列=发邮件日期（可空，Excel日期格/文本日期/20260801数字都认识）。
+    也兼容「链接+日期」写在同一格；空行跳过，表头行（含 链接/link/频道/channel/url 等）自动跳过。
+    """
+    import pandas as pd
+    df = pd.read_excel(f, header=None)
+    lines, dates = [], {}
+    for i, row in df.iterrows():
+        raw = str(row.iloc[0]).strip() if len(row) > 0 else ""
+        if not raw or raw.lower() in ("nan", "none"):
+            continue
+        if i == 0 and any(k in raw.lower() for k in ("链接", "link", "频道", "channel", "url", "유튜브")):
+            continue  # 表头行
+        link, d = split_line_date(raw)
+        if df.shape[1] >= 2:
+            cell = row.iloc[1]
+            s = str(cell).strip()
+            if s.lower() not in ("", "nan", "none", "nat"):
+                if hasattr(cell, "strftime"):  # Excel 日期格读进来是 Timestamp
+                    d = cell.strftime("%Y-%m-%d")
+                elif isinstance(cell, float) and cell.is_integer():
+                    d = _parse_date_token(str(int(cell))) or d
+                else:
+                    d = _parse_date_token(s) or d
+        if link:
+            lines.append(link)
+            if d:
+                dates[link] = d
+    return lines, dates
+
+
 def _clean_line(raw) -> str:
     """清洗一行输入：去空白/引号/尖括号，剥 Excel HYPERLINK 公式和 Markdown 链接外壳。"""
     s = str(raw).strip().strip('"\'').strip().strip('<>').strip()

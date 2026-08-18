@@ -21,7 +21,7 @@ from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
-    split_main_pending, split_line_date,
+    split_main_pending, split_line_date, parse_import_excel,
 )
 from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL,
                          generate_keywords, generate_bd_email_ai)
@@ -2332,8 +2332,37 @@ https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语
     st.caption("链接什么格式都行：主页链接、/channel/UC…、老式 /user/ 和 /c/ 链接、视频/Shorts 链接（自动反查所属频道）、m./music. 开头、带参数（?si=…）都能识别。")
     st.markdown("")
 
+    col_u1, col_u2 = st.columns([2, 1])
+    with col_u1:
+        up_file = st.file_uploader("方式一：上传 Excel（第1列链接，第2列发邮件日期）", type=["xlsx", "xls"])
+    with col_u2:
+        _tpl_buf = BytesIO()
+        pd.DataFrame([
+            ["链接", "发邮件日期"],
+            ["https://www.youtube.com/@handle", "2026-08-01"],
+            ["https://www.youtube.com/@handle2", ""],
+            ["@handle3", "2026/7/15"],
+        ]).to_excel(_tpl_buf, index=False, engine="openpyxl")
+        st.download_button(
+            "📄 下载 Excel 模板", data=_tpl_buf.getvalue(),
+            file_name="批量导入模板.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        st.caption("日期那列可空，空着按今天算")
+
+    up_lines, up_dates = [], {}
+    if up_file is not None:
+        try:
+            up_lines, up_dates = parse_import_excel(up_file)
+            if up_lines:
+                st.success(f"Excel 读到 {len(up_lines)} 个链接，其中 {len(up_dates)} 个带日期")
+            else:
+                st.warning("Excel 里没读到有效链接，看看是不是空表")
+        except Exception:
+            st.error("Excel 读取失败，请另存为 .xlsx 格式再传")
+
     import_text = st.text_area(
-        "粘贴链接或ID", height=200,
+        "方式二：直接粘贴链接或ID", height=200,
         placeholder="每行一个频道链接或ID...",
     )
 
@@ -2348,82 +2377,81 @@ https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语
         )
 
     if st.button("📥 开始导入", use_container_width=True):
-        if not import_text.strip():
-            st.warning("请先粘贴链接或ID")
-        elif not st.session_state.api_key:
-            st.error("需要 YouTube API Key 来查询频道信息")
+        # 数据来源：传了Excel就用Excel，否则用粘贴的文本
+        if up_file is not None:
+            lines, line_dates = up_lines, up_dates
         else:
-            # 解析输入：每行 = 链接 + 可选的发邮件日期（行尾），格式转换交给 resolve_channel_ids
-            raw_lines = [l.strip() for l in import_text.strip().split("\n") if l.strip()]
             lines, line_dates = [], {}
-            for rl in raw_lines:
+            for rl in [l.strip() for l in import_text.strip().split("\n") if l.strip()]:
                 link, d = split_line_date(rl)
                 if link:
                     lines.append(link)
                     if d:
                         line_dates[link] = d
 
-            if not lines:
-                st.error("未能解析出有效的频道ID")
-            else:
-                db = get_db()
-                with st.spinner(f"正在导入 {len(lines)} 个频道..."):
-                    if db:
-                        result = db.import_existing(
-                            lines, st.session_state.api_key,
-                            st.session_state.quota, status=import_status,
-                            imported_by=st.session_state.user_name,
-                            line_dates=line_dates, update_existing=update_existing,
+        if not lines:
+            st.warning("没有可导入的链接：看看Excel内容，或先粘贴链接")
+        elif not st.session_state.api_key:
+            st.error("需要 YouTube API Key 来查询频道信息")
+        else:
+            db = get_db()
+            with st.spinner(f"正在导入 {len(lines)} 个频道..."):
+                if db:
+                    result = db.import_existing(
+                        lines, st.session_state.api_key,
+                        st.session_state.quota, status=import_status,
+                        imported_by=st.session_state.user_name,
+                        line_dates=line_dates, update_existing=update_existing,
+                    )
+                    parts = [f"新增 {result['success']}"]
+                    if result.get("updated"):
+                        parts.append(f"更新 {result['updated']}")
+                    skipped_left = result["skipped"] - result.get("updated", 0)
+                    if skipped_left > 0:
+                        parts.append(f"跳过（已存在）{skipped_left}")
+                    parts.append(f"失败 {result['failed']}")
+                    msg = "✅ 导入完成：" + "，".join(parts)
+                    if result["failed"] > 0:
+                        msg += "（失败 = 链接格式无法识别，或频道已不存在）"
+                    st.success(msg)
+                    if result.get("failed_lines"):
+                        st.warning(
+                            "以下行导入失败，请检查后重试：\n\n"
+                            + "\n\n".join(f"· {line}" for line in result["failed_lines"])
                         )
-                        parts = [f"新增 {result['success']}"]
-                        if result.get("updated"):
-                            parts.append(f"更新 {result['updated']}")
-                        skipped_left = result["skipped"] - result.get("updated", 0)
-                        if skipped_left > 0:
-                            parts.append(f"跳过（已存在）{skipped_left}")
-                        parts.append(f"失败 {result['failed']}")
-                        msg = "✅ 导入完成：" + "，".join(parts)
-                        if result["failed"] > 0:
-                            msg += "（失败 = 链接格式无法识别，或频道已不存在）"
-                        st.success(msg)
-                        if result.get("failed_lines"):
-                            st.warning(
-                                "以下行导入失败，请检查后重试：\n\n"
-                                + "\n\n".join(f"· {line}" for line in result["failed_lines"])
-                            )
-                    else:
-                        # 本地模式
-                        resolved, bad_lines, raw_map = resolve_channel_ids(
-                            lines, st.session_state.api_key, st.session_state.quota)
-                        chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
-                        today = datetime.now().strftime("%Y-%m-%d")
-                        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                        have = {c.get("channel_id"): c for c in st.session_state.local_db}
-                        added, updated = 0, 0
-                        for cid, info in chs.items():
-                            sent = line_dates.get(raw_map.get(cid, "")) or today
-                            if cid in have:
-                                if update_existing:
-                                    rec = have[cid]
-                                    rec["status"] = import_status
-                                    rec["status_date"] = now
-                                    if import_status == "已发邮件":
-                                        rec["email_sent_date"] = sent
-                                    updated += 1
-                                continue
-                            info["status"] = import_status
-                            info["status_date"] = now
-                            info["email_sent_date"] = sent if import_status == "已发邮件" else None
-                            info["discovered_by"] = st.session_state.user_name
-                            info["notes"] = "批量导入"
-                            st.session_state.local_db.append(info)
-                            added += 1
-                        st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
-                        if bad_lines:
-                            st.warning(
-                                "以下行导入失败，请检查后重试：\n\n"
-                                + "\n\n".join(f"· {line}" for line in bad_lines)
-                            )
+                else:
+                    # 本地模式
+                    resolved, bad_lines, raw_map = resolve_channel_ids(
+                        lines, st.session_state.api_key, st.session_state.quota)
+                    chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
+                    today = datetime.now().strftime("%Y-%m-%d")
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    have = {c.get("channel_id"): c for c in st.session_state.local_db}
+                    added, updated = 0, 0
+                    for cid, info in chs.items():
+                        sent = line_dates.get(raw_map.get(cid, "")) or today
+                        if cid in have:
+                            if update_existing:
+                                rec = have[cid]
+                                rec["status"] = import_status
+                                rec["status_date"] = now
+                                if import_status == "已发邮件":
+                                    rec["email_sent_date"] = sent
+                                updated += 1
+                            continue
+                        info["status"] = import_status
+                        info["status_date"] = now
+                        info["email_sent_date"] = sent if import_status == "已发邮件" else None
+                        info["discovered_by"] = st.session_state.user_name
+                        info["notes"] = "批量导入"
+                        st.session_state.local_db.append(info)
+                        added += 1
+                    st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
+                    if bad_lines:
+                        st.warning(
+                            "以下行导入失败，请检查后重试：\n\n"
+                            + "\n\n".join(f"· {line}" for line in bad_lines)
+                        )
 
 
 # ============================================================
