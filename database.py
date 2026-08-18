@@ -8,6 +8,48 @@ import json
 from supabase import create_client, Client
 
 
+def enrich_import_channels(channels: dict, api_key: str, quota, config: dict = None) -> dict:
+    """
+    批量导入的频道补全：走和挖掘站一样的「验证采集 → AI 垂类 → 自动评分」流程，
+    补齐粉丝数、近30天播放、播订比、邮箱、商业历史、评分、AI 垂类等字段。
+    和挖掘的区别：不活跃/没有上传的频道不丢弃（allow_inactive），照常保留能拿到的数据。
+    单个频道补全失败只保留基础信息，不打断整个导入。
+    channels: cid → 频道信息 dict，就地修改后原样返回。
+    """
+    if not channels:
+        return channels
+
+    from youtube_api import verify_channel, score_channel
+
+    # 1) 逐个频道采集视频/播放/邮箱/商业化数据（不活跃也保留）
+    for cid in list(channels.keys()):
+        info = channels[cid]
+        try:
+            channels[cid] = verify_channel(info, api_key, quota, config, allow_inactive=True) or info
+        except Exception:
+            channels[cid] = info
+
+    enriched = list(channels.values())
+
+    # 2) AI 垂类分析（未配置 key 时自动给中性值，不阻断）
+    try:
+        from ai_analyzer import analyze_channels
+        analyze_channels(enriched)
+    except Exception:
+        pass
+
+    # 3) 自动评分（AI 垂类写进 category，和挖掘流程保持一致）
+    for info in enriched:
+        if info.get("ai_category"):
+            info["category"] = info["ai_category"]
+        try:
+            info["scores"] = score_channel(info, config)
+        except Exception:
+            info["scores"] = {"total": 0}
+
+    return channels
+
+
 class InfluencerDB:
     """公共网红数据库（基于 Supabase）"""
 
@@ -358,8 +400,9 @@ class InfluencerDB:
         if not new_ids:
             return result
 
-        # 批量获取频道信息
+        # 批量获取频道信息，然后走和挖掘一样的补全（播放/邮箱/评分/AI 垂类）
         channels = get_channels(new_ids, api_key, quota)
+        channels = enrich_import_channels(channels, api_key, quota)
 
         for cid, info in channels.items():
             record = {
@@ -367,18 +410,24 @@ class InfluencerDB:
                 "channel_name": info.get("channel_name", ""),
                 "channel_url": info.get("channel_url", ""),
                 "about_url": info.get("about_url", ""),
-                "category": "",
+                "category": info.get("category", ""),
                 "subscribers": info.get("subscribers", 0),
-                "avg_views_30d": 0,
-                "view_sub_ratio": 0,
-                "last_upload": "",
-                "score_total": 0,
-                "score_detail": "",
-                "emails": "",
-                "has_commercial": False,
-                "commercial_evidence": "",
-                "recent_titles": "",
-                "thumbnails": "",
+                "avg_views_30d": info.get("avg_views_30d", 0),
+                "view_sub_ratio": info.get("view_sub_ratio", 0),
+                "last_upload": info.get("last_upload", ""),
+                "score_total": info.get("scores", {}).get("total", 0),
+                "score_detail": json.dumps({
+                    "scores": info.get("scores", {}),
+                    "ai_category": info.get("ai_category", ""),
+                    "ai_relevance": info.get("ai_relevance", ""),
+                    "ai_tags": info.get("ai_tags", []),
+                    "ai_analyzed": info.get("ai_analyzed", False),
+                }, ensure_ascii=False),
+                "emails": ", ".join(info.get("emails", [])),
+                "has_commercial": info.get("commercial_history", {}).get("has_commercial", False),
+                "commercial_evidence": ", ".join(info.get("commercial_history", {}).get("evidence", [])),
+                "recent_titles": " / ".join(info.get("recent_titles", [])[:3]),
+                "thumbnails": str(info.get("recent_thumbnails", [])),
                 "status": status,
                 "status_date": now,
                 "discovered_by": line_by.get(raw_by_id.get(cid, "")) or imported_by,

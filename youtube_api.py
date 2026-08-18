@@ -783,10 +783,11 @@ def _median(values: list) -> float:
 
 
 def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
-                   config: dict = None) -> dict | None:
+                   config: dict = None, allow_inactive: bool = False) -> dict | None:
     """
     对单个频道做完整验证和数据采集
     返回增强后的频道信息，不活跃返回 None
+    allow_inactive=True 时（批量导入补全用）：没有上传/不活跃的频道也保留，照常采集能拿到的数据
     """
     if config is None:
         config = DEFAULT_CONFIG
@@ -796,14 +797,14 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
     # 获取最近上传
     uploads = get_recent_uploads(channel_info["uploads_playlist_id"], api_key, quota, max_results=10)
     if not uploads:
-        return None
+        return channel_info if allow_inactive else None
 
     # 检查活跃度
     latest_upload = uploads[0]["published_at"]
     latest_date = datetime.fromisoformat(latest_upload.replace("Z", "+00:00"))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days_active)
 
-    if latest_date < cutoff:
+    if latest_date < cutoff and not allow_inactive:
         return None  # 不活跃
 
     # 获取最近视频的播放数据

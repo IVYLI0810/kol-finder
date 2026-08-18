@@ -2376,6 +2376,8 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
             help="上次导入过的博主会按这次的标记和发邮件日期刷新；关掉则已有的不动",
         )
 
+    st.caption("导入时会自动补全和挖掘一样的数据：粉丝数、近30天播放、播订比、邮箱、评分、AI垂类（比之前稍慢一点，属正常）")
+
     if st.button("📥 开始导入", use_container_width=True):
         # 数据来源：传了Excel就用Excel，否则用粘贴的文本
         if up_file is not None:
@@ -2397,7 +2399,7 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
             st.error("需要 YouTube API Key 来查询频道信息")
         else:
             db = get_db()
-            with st.spinner(f"正在导入 {len(lines)} 个频道..."):
+            with st.spinner(f"正在导入 {len(lines)} 个频道，并自动补全数据（播放量/邮箱/评分/AI垂类，稍等～）"):
                 if db:
                     result = db.import_existing(
                         lines, st.session_state.api_key,
@@ -2427,6 +2429,9 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                     resolved, bad_lines, raw_map = resolve_channel_ids(
                         lines, st.session_state.api_key, st.session_state.quota)
                     chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
+                    # 和 Supabase 模式一样走补全（播放/邮箱/评分/AI 垂类）
+                    from database import enrich_import_channels
+                    chs = enrich_import_channels(chs, st.session_state.api_key, st.session_state.quota)
                     today = datetime.now().strftime("%Y-%m-%d")
                     now = datetime.now().strftime("%Y-%m-%d %H:%M")
                     have = {c.get("channel_id"): c for c in st.session_state.local_db}
@@ -2447,6 +2452,7 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                         info["email_sent_date"] = sent if import_status == "已发邮件" else None
                         info["discovered_by"] = line_by.get(raw_map.get(cid, "")) or st.session_state.user_name
                         info["notes"] = "批量导入"
+                        info["score_total"] = info.get("scores", {}).get("total", 0)
                         st.session_state.local_db.append(info)
                         added += 1
                     st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
