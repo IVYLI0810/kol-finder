@@ -484,6 +484,35 @@ class InfluencerDB:
         except Exception:
             return False
 
+    def rename_member(self, old_name: str, new_name: str) -> tuple:
+        """给成员改名，并把旧名下的数据（挖到的网红、个人设置）一起迁到新名。
+        返回 (是否成功, 错误信息)。"""
+        old_name = (old_name or "").strip()
+        new_name = (new_name or "").strip()
+        if not old_name or not new_name:
+            return False, "名字不能为空"
+        if old_name == new_name:
+            return False, "新名字和旧名字一样"
+        members = self.get_members()
+        if old_name not in members:
+            return False, f"名单里没有「{old_name}」"
+        if new_name in members:
+            return False, f"「{new_name}」已在名单里，不能改成它"
+        try:
+            self.client.table(self.MEMBERS_TABLE).update({"name": new_name}).eq("name", old_name).execute()
+        except Exception:
+            return False, "改名失败，请稍后再试"
+        # 旧名下的数据搬家（个别失败不影响改名主流程）
+        try:
+            self.client.table(self.TABLE_NAME).update({"discovered_by": new_name}).eq("discovered_by", old_name).execute()
+        except Exception:
+            pass
+        try:
+            self.client.table(self.SETTINGS_TABLE).update({"member_name": new_name}).eq("member_name", old_name).execute()
+        except Exception:
+            pass
+        return True, ""
+
     # ============================================================
     # 关键词库（可增删 · 全队共享）
     # ============================================================

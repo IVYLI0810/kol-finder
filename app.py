@@ -1138,6 +1138,7 @@ with st.sidebar:
     # ---------- 名单管理：删掉不用/写错的名字 ----------
     if db_for_members and members:
         with st.expander("🗑️ 删除名单里的名字"):
+            st.caption("只把名字从下拉框移除；她挖到的网红仍留在库里。想把数据转到新名字下，用下面的「改名字」。")
             removable = [m for m in members if m != st.session_state.user_name]
             if removable:
                 del_names = st.multiselect("选要删的名字（可多选）", removable, key="del_members")
@@ -1152,6 +1153,25 @@ with st.sidebar:
                         st.warning("先勾选要删的名字")
             else:
                 st.caption("没有其他名字可删（自己正在用的名字不能删）")
+
+        with st.expander("✏️ 改名字"):
+            st.caption("改名后，旧名下挖到的网红和个人设置会一起搬到新名字下")
+            ren_old = st.selectbox("改谁的名字", members, key="ren_old")
+            ren_new = st.text_input("新名字", key="ren_new", placeholder="输入新名字")
+            if st.button("✏️ 确认改名", key="ren_btn", use_container_width=True):
+                ok, err = db_for_members.rename_member(ren_old, ren_new)
+                if ok:
+                    new_stripped = ren_new.strip()
+                    if st.session_state.user_name == ren_old.strip():
+                        st.session_state.user_name = new_stripped
+                        st.query_params["u"] = new_stripped
+                    for k in ("ren_old", "ren_new", "who_select"):
+                        if k in st.session_state:
+                            del st.session_state[k]
+                    st.success(f"已改成「{new_stripped}」，旧名下的网红和设置也搬好了")
+                    st.rerun()
+                else:
+                    st.error(err)
 
     if st.session_state.user_name and chosen == st.session_state.user_name:
         pass  # 名字已生效（下拉框会显示选中状态），不再额外弹问候框，保持侧边栏干净
