@@ -216,6 +216,10 @@ st.markdown("""
         background: #e2f6e9; border: 1.5px solid #7fce9d; border-radius: 999px;
         padding: 4px 12px; margin: 2px 0;
     }
+    /* 列表模式：徽章+日期同一行、整体小一号，行高与普通行一致 */
+    .kol-intro-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 0; }
+    .kol-intro-line .kol-introduced { font-size: 10.5px; padding: 1px 8px; margin: 0; white-space: nowrap; }
+    .kol-intro-line .status-date { margin-top: 0; white-space: nowrap; }
 
     /* ---------- 卡片紧凑化：压缩内部垂直间距，让卡片变矮 ---------- */
     /* 容器内元素间距收紧 */
@@ -270,7 +274,7 @@ st.markdown("""
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) > .element-container { margin: 0 !important; }
     /* 各列内容上下居中：列本身居中对齐 + 列内内容也居中 */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 10px; align-items: center !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] { justify-content: center !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] { justify-content: center !important; gap: 2px !important; }
     /* 上下居中修复：Streamlit 把每个文字格子的高度锁成单行高（约24px），而"昵称+邮箱"是两行（约40px），
        多出的内容向下溢出、显得文字整体偏下。这里只把"文字格子"(.stMarkdown)上移 8px 补偿，
        让"昵称+邮箱"整体落在行的几何中心。
@@ -2241,7 +2245,7 @@ def _library_fragment():
 
                     # 一行八列：勾选 · 频道/邮箱 · 垂类 · 订阅 · 评分 · 状态 · 挖掘人 · 操作
                     _cid = rec.get("channel_id", "")
-                    r0, r1, r2, r3, r4, r5, r6, r7 = st.columns([0.4, 2.4, 1, 0.9, 0.7, 1.2, 0.9, 1.9])
+                    r0, r1, r2, r3, r4, r5, r6, r7 = st.columns([0.4, 2.4, 1, 0.9, 0.7, 1.4, 0.8, 1.8])
                     with r0:
                         st.checkbox("选", key=f"bchk_{_cid}", on_change=_on_batch_check, args=(_cid,),
                                     label_visibility="collapsed", help="勾选后可批量操作")
@@ -2258,9 +2262,11 @@ def _library_fragment():
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
                         if status == "已引入":
-                            st.markdown(
-                                '<div class="kol-introduced">✅ 已引入</div>',
-                                unsafe_allow_html=True,
+                            # 徽章+日期同一行内联，列表行高与普通行一致
+                            _render_html(
+                                '<div class="kol-intro-line"><span class="kol-introduced">✅ 已引入</span>'
+                                + _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+                                + '</div>'
                             )
                         else:
                             _ST_OPTS_L = ["新发现", "已发邮件"]
@@ -2270,9 +2276,9 @@ def _library_fragment():
                                 key=f"lst_{_cid}", label_visibility="collapsed",
                                 on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
                             )
-                        _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
-                        if _status_date:
-                            _render_html(_status_date)
+                            _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+                            if _status_date:
+                                _render_html(_status_date)
                     with r6:
                         _render_html(f'<span class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</span>')
                     with r7:
