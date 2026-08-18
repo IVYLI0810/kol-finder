@@ -426,11 +426,12 @@ def generate_keywords(vertical: str, count: int = 9, timeout: int = 60) -> tuple
 
 
 def generate_bd_email_ai(ch: dict, sender: str, kkt: str, baseline: str,
-                         timeout: int = 90) -> tuple[str, str, str]:
+                         extra_req: str = "", timeout: int = 90) -> tuple[str, str, str]:
     """AI 一键定制韩语 BD 邮件（邀请合作向，不推商品）。
 
     ch: 网红记录（channel_name/ai_category/category/ai_tags/subscribers）
     sender: 落款名；kkt: 카카오톡 ID；baseline: 团队官方模板正文（结构与关键信息基准）
+    extra_req: 用户附加要求（语气/跟进背景/特别强调点等），尽量满足
     返回 (主题, 正文, 错误信息)；失败时前两项为空串，调用方回退模板版。
     """
     if not ai_ready():
@@ -440,6 +441,10 @@ def generate_bd_email_ai(ch: dict, sender: str, kkt: str, baseline: str,
     tags = [t for t in (ch.get("ai_tags") or []) if t][:2]
     subs = ch.get("subscribers") or 0
     sender = (sender or "").strip() or "담당자"
+    req_block = ""
+    if (extra_req or "").strip():
+        req_block = (f"\n[用户附加要求]\n{extra_req.strip()}\n"
+                     "附加要求尽量满足；但若与「严禁编造事实」冲突，以不编造为准。\n")
 
     prompt = f"""你是AliExpress韩国网红营销团队的韩语商务邮件专家。
 
@@ -457,6 +462,7 @@ def generate_bd_email_ai(ch: dict, sender: str, kkt: str, baseline: str,
 3. 只定制开头问候与「为什么选你」段落：结合博主的垂类/标签，自然、具体地写出对其内容方向的关注和契合点；严禁编造信息里没有的具体视频标题、播放量、评论等事实。
 4. 韩语商务敬语，真诚简洁；总篇幅与模板相差不超过两成。
 5. 落款固定写「{sender}」，카카오톡 ID 固定写「{kkt}」；开头自我介绍句固定写「알리익스프레스 마케팅팀 {sender}입니다.」，逐字照抄，不得重复或叠加词汇。
+{req_block}
 
 [官方模板]
 {baseline}

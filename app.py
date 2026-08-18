@@ -911,14 +911,20 @@ def bd_email_dialog(rec):
 
     st.caption("已自动填入该博主信息和你的专属署名。想要更定制的版本，点「✨ 一键AI定制」。")
 
+    req = st.text_input(
+        "✍️ 附加要求（可选 · 写给AI看）",
+        key=f"aimail_req_{cid}",
+        placeholder="例：语气更活泼 / 强调制作费可谈 / 这是第二次跟进，上封邮件对方没回",
+    )
+
     c1, c2 = st.columns([1, 2])
     with c1:
         ai_btn = st.button("✨ 一键AI定制", key=f"aimail_{cid}", use_container_width=True)
     with c2:
-        st.caption("🤖 AI 按该博主垂类/标签定制开头和「为什么选你」，模板骨架与关键信息不变")
+        st.caption("🤖 AI 按该博主垂类/标签+你的附加要求定制开头和「为什么选你」，模板骨架与关键信息不变")
     if ai_btn:
         with st.spinner("🤖 AI 正在定制这封邮件…"):
-            s2, b2, err = generate_bd_email_ai(rec, sender, kkt, body_t)
+            s2, b2, err = generate_bd_email_ai(rec, sender, kkt, body_t, extra_req=req)
         if err:
             st.warning(f"AI 定制没成功（{err}），已保留模板版")
         else:
