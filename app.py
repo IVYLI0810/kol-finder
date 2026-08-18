@@ -1058,7 +1058,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
             db = get_db()
             if db:
                 if db.add_influencer(ch, st.session_state.user_name):
-                    st.success(f"已添加「{ch['channel_name']}」")
+                    st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」")
                     _count_records.clear()
                     _get_paginated_records.clear()
                     _get_dedup_records.clear()
@@ -1071,7 +1071,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 ch["discovered_by"] = st.session_state.user_name
                 st.session_state.local_db.append(ch)
                 _get_dedup_records.clear()
-                st.success(f"已添加「{ch['channel_name']}」（本地模式）")
+                st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」（本地模式）")
     with col_a2:
         if st.button("跳过", key=f"{key_prefix}skip_{rank}", use_container_width=True):
             st.session_state.search_results.remove(ch)
@@ -1565,7 +1565,7 @@ with tab_search:
                             ch["discovered_by"] = st.session_state.user_name
                             st.session_state.local_db.append(ch)
                             added += 1
-                    st.success(f"已添加 {added} 个博主")
+                    st.success(f"已添加 {added} 个博主，均标记为「新发现」")
             with col_ba2:
                 if filtered:
                     export_data = []
