@@ -292,6 +292,52 @@ class InfluencerDB:
                 success += 1
         return success
 
+    def add_influencer_from_yts(self, yrec: dict) -> bool:
+        """
+        YTS 履约同步自动补建：库里没有的履约网红，建一条精简记录并直接标记「已引入」。
+        yrec: 宜搭记录（channel_id/channel_name/channel_url/category/recruiter/subscribers/email）
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cid = yrec.get("channel_id", "")
+        if not cid:
+            return False
+        record = {
+            "channel_id": cid,
+            "channel_name": yrec.get("channel_name", ""),
+            "channel_url": yrec.get("channel_url", "") or f"https://www.youtube.com/channel/{cid}",
+            "about_url": "",
+            "category": yrec.get("category", ""),
+            "subscribers": yrec.get("subscribers", 0) or 0,
+            "avg_views_30d": 0,
+            "view_sub_ratio": 0,
+            "last_upload": "",
+            "score_total": 0,
+            "score_detail": json.dumps({
+                "scores": {}, "ai_category": "", "ai_relevance": "",
+                "ai_tags": [], "ai_analyzed": False,
+            }, ensure_ascii=False),
+            "emails": yrec.get("email", "") or "",
+            "has_commercial": False,
+            "commercial_evidence": "",
+            "recent_titles": "",
+            "thumbnails": "[]",
+            "status": "已引入",
+            "status_date": now,
+            "discovered_by": yrec.get("recruiter", "") or "YTS同步",
+            "email_sent_date": None,
+            "introduced_date": now,
+            "notes": f"[YTS同步自动创建] 该网红在YTS履约中，自动补建并标记已引入",
+            "added_date": now,
+            "last_checked": now,
+        }
+        try:
+            self.client.table(self.TABLE_NAME).insert(record).execute()
+            self.last_error = None
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            return False
+
     # ============================================================
     # 更新
     # ============================================================

@@ -210,6 +210,13 @@ st.markdown("""
     .kol-notes { font-size: 11px; color: #a05c74; margin-top: 6px; font-weight: 600; word-break: break-word; }
     .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 8px 0; }
 
+    /* 已引入徽章（YTS 履约同步自动标记，只读） */
+    .kol-introduced {
+        display: inline-block; font-size: 12px; font-weight: 800; color: #14663a;
+        background: #e2f6e9; border: 1.5px solid #7fce9d; border-radius: 999px;
+        padding: 4px 12px; margin: 2px 0;
+    }
+
     /* ---------- 卡片紧凑化：压缩内部垂直间距，让卡片变矮 ---------- */
     /* 容器内元素间距收紧 */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { gap: 8px; }
@@ -1667,7 +1674,47 @@ def _library_fragment():
     if _chg_msg:
         st.success(_chg_msg)
 
+    # YTS 履约同步的提示（同步有变化 / 未接通时写进 session，rerun 后显示）
+    _yts_msg = st.session_state.pop("_yts_sync_msg", None)
+    if _yts_msg:
+        st.info(_yts_msg)
+
     db = get_db()
+
+    # ---- YTS 履约自动同步：每次打开网红库悄悄对一遍（5 分钟冷却，防频繁调用）----
+    if db:
+        import time as _time
+        try:
+            import yts_sync as _yts
+        except Exception:
+            _yts = None
+            if not st.session_state.get("_yts_import_hinted"):
+                st.session_state["_yts_import_hinted"] = True
+                st.session_state["_yts_sync_msg"] = "🔗 YTS 同步模块加载失败（可能缺依赖），不影响正常使用"
+        if _yts is not None and _time.time() - st.session_state.get("_yts_sync_ts", 0) > 300:
+            st.session_state["_yts_sync_ts"] = _time.time()
+            _summary = None
+            try:
+                if _yts.yts_available():
+                    with st.spinner("正在同步 YTS 履约状态…"):
+                        _summary = _yts.run_sync(db)
+                elif not st.session_state.get("_yts_nokey_hinted"):
+                    st.session_state["_yts_nokey_hinted"] = True
+                    st.session_state["_yts_sync_msg"] = "🔗 YTS 同步未接通（未配置宜搭钥匙），两边暂不自动对齐"
+            except Exception:
+                if not st.session_state.get("_yts_err_hinted"):
+                    st.session_state["_yts_err_hinted"] = True
+                    st.session_state["_yts_sync_msg"] = "🔗 YTS 这次没同步成功（网络或宜搭波动），不影响正常使用"
+            if _summary and (_summary["marked"] or _summary["created"] or _summary["terminated"]):
+                _count_records.clear()
+                _get_paginated_records.clear()
+                _get_dedup_records.clear()
+                st.session_state["_yts_sync_msg"] = (
+                    f"🔗 YTS 履约已同步：{_summary['marked']} 人标记已引入 · "
+                    f"{_summary['created']} 人自动补建 · {_summary['terminated']} 人标注合作终止"
+                )
+                st.rerun()
+
     user_name = st.session_state.user_name or ""
 
     # 初始化筛选/分页状态
@@ -1719,7 +1766,7 @@ def _library_fragment():
             "全部", tuple(), "全部", "",
         )
         status_counts = {}
-        for s in ["新发现", "已发邮件"]:
+        for s in ["新发现", "已发邮件", "已引入"]:
             status_counts[s] = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 s, tuple(), "全部", "",
@@ -1727,7 +1774,7 @@ def _library_fragment():
     else:
         all_local = st.session_state.local_db
         total_count = len(all_local)
-        status_counts = {s: 0 for s in ["新发现", "已发邮件"]}
+        status_counts = {s: 0 for s in ["新发现", "已发邮件", "已引入"]}
         for r in all_local:
             s = r.get("status", "")
             if s in status_counts:
@@ -1736,9 +1783,9 @@ def _library_fragment():
     if total_count == 0:
         st.info("网红库为空。搜索后点击「加入网红库」，或使用「📥 批量导入」添加已有合作博主。")
     else:
-        cols = st.columns(3)
-        labels = ["总数", "新发现", "已发邮件"]
-        keys = ["total", "新发现", "已发邮件"]
+        cols = st.columns(4)
+        labels = ["总数", "新发现", "已发邮件", "已引入"]
+        keys = ["total", "新发现", "已发邮件", "已引入"]
         values = [total_count] + [status_counts[k] for k in keys[1:]]
         for col, label, val in zip(cols, labels, values):
             with col:
@@ -1750,7 +1797,7 @@ def _library_fragment():
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             st.selectbox(
-                "状态", ["全部", "新发现", "已发邮件"],
+                "状态", ["全部", "新发现", "已发邮件", "已引入"],
                 key="filter_status", on_change=_reset_db_page,
             )
         with col_f2:
@@ -2117,15 +2164,21 @@ def _library_fragment():
                             <hr class="kol-divider">
                             """)
 
-                            # 状态下拉（只保留 新发现 / 已发邮件 两个状态）
+                            # 状态下拉（手动只允许 新发现 / 已发邮件；已引入由 YTS 同步管理，只展示）
                             # key 按频道ID存 + on_change 回调保存：批量改状态不会被残留旧值改回去
-                            _ST_OPTS = ["新发现", "已发邮件"]
-                            st.selectbox(
-                                "状态", _ST_OPTS,
-                                index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
-                                key=f"st_{_cid}", label_visibility="collapsed",
-                                on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
-                            )
+                            if status == "已引入":
+                                st.markdown(
+                                    '<div class="kol-introduced">✅ 已引入 · YTS履约</div>',
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                _ST_OPTS = ["新发现", "已发邮件"]
+                                st.selectbox(
+                                    "状态", _ST_OPTS,
+                                    index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
+                                    key=f"st_{_cid}", label_visibility="collapsed",
+                                    on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
+                                )
 
                             # 刷新 / 删除 / 备注
                             c_rc, c_rm, c_nt = st.columns([1, 1, 4])
@@ -2204,13 +2257,19 @@ def _library_fragment():
                     with r4:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
-                        _ST_OPTS_L = ["新发现", "已发邮件"]
-                        st.selectbox(
-                            "状态", _ST_OPTS_L,
-                            index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
-                            key=f"lst_{_cid}", label_visibility="collapsed",
-                            on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
-                        )
+                        if status == "已引入":
+                            st.markdown(
+                                '<div class="kol-introduced">✅ 已引入</div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            _ST_OPTS_L = ["新发现", "已发邮件"]
+                            st.selectbox(
+                                "状态", _ST_OPTS_L,
+                                index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
+                                key=f"lst_{_cid}", label_visibility="collapsed",
+                                on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
+                            )
                         _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
                         if _status_date:
                             _render_html(_status_date)
