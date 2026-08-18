@@ -316,6 +316,42 @@ _VIDEO_ID_RE = re.compile(r'^[A-Za-z0-9_-]{11}$')
 _HANDLE_CHARS_RE = re.compile(r'^[A-Za-z0-9._-]{3,30}$')
 
 
+def _parse_date_token(tok: str):
+    """一个词如果是日期就返回 YYYY-MM-DD，否则返回 None。
+    支持：2026-08-01 / 2026/8/1 / 2026.8.1 / 20260801 / 2026년 8월 1일"""
+    t = str(tok).strip().strip(',，;；').strip()
+    if not t:
+        return None
+    m = re.match(r'^(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?$', t)
+    if not m:
+        m = re.match(r'^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$', t)
+    if not m:
+        m = re.match(r'^(\d{4})(\d{2})(\d{2})$', t)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not (1990 <= y <= 2100 and 1 <= mo <= 12 and 1 <= d <= 31):
+        return None
+    return f"{y:04d}-{mo:02d}-{d:02d}"
+
+
+def split_line_date(line: str) -> tuple:
+    """把导入的一行拆成 (链接部分, 发邮件日期或None)。
+    日期写在行尾、用空格/逗号隔开都行；不写日期就是 None。
+    例：'https://www.youtube.com/@abc 2026-08-01' → ('https://www.youtube.com/@abc', '2026-08-01')
+    """
+    s = str(line).strip()
+    if not s:
+        return "", None
+    parts = re.split(r'[\s,，;；]+', s)
+    if len(parts) >= 2:
+        d = _parse_date_token(parts[-1])
+        if d:
+            link = s[:len(s) - len(parts[-1])].rstrip(' \t,，;；').strip()
+            return link, d
+    return s, None
+
+
 def _clean_line(raw) -> str:
     """清洗一行输入：去空白/引号/尖括号，剥 Excel HYPERLINK 公式和 Markdown 链接外壳。"""
     s = str(raw).strip().strip('"\'').strip().strip('<>').strip()
@@ -470,13 +506,13 @@ def _resolve_custom(name: str, api_key: str, quota: QuotaTracker):
     return None
 
 
-def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -> tuple[list[str], list[str]]:
+def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -> tuple[list[str], list[str], dict]:
     """
     把混合输入统一解析成有效的 UC 频道ID（全格式版）。
     支持：UC频道ID / /channel/UC… / @handle（裸写或链接）/ 老式 /user/ 与 /c/ 链接 /
     youtube.com/裸名字 / 视频链接（watch、youtu.be、Shorts、直播、embed，自动反查所属频道）/
     m.、music.、studio. 子域名 / 带任意参数与子页面 / Excel超链接公式。
-    返回：(按输入顺序去重后的有效频道ID列表, 无法解析的原始行列表)
+    返回：(按输入顺序去重后的有效频道ID列表, 无法解析的原始行列表, 频道ID→原始行映射)
     """
     tasks = []   # (序号, kind, value, 原始行)
     failed_lines = []
@@ -538,15 +574,17 @@ def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -
     # 按输入顺序收集、去重
     valid = []
     seen = set()
+    raw_by_id = {}   # 频道ID → 原始行（第一次出现的那行）
     for i, kind, value, raw in tasks:
         cid = results.get(i)
         if cid and cid not in seen:
             seen.add(cid)
             valid.append(cid)
+            raw_by_id[cid] = raw
         elif not cid:
             failed_lines.append(raw)
 
-    return valid, failed_lines
+    return valid, failed_lines, raw_by_id
 
 
 # ============================================================

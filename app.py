@@ -21,7 +21,7 @@ from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
-    split_main_pending,
+    split_main_pending, split_line_date,
 )
 from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL,
                          generate_keywords, generate_bd_email_ai)
@@ -2286,15 +2286,12 @@ with tab_import:
     st.markdown("把 YouTube 链接或频道ID粘贴进来，导入后搜索时会自动跳过这些人。")
     st.markdown("")
 
-    st.markdown("**什么格式都行，每行一个：**")
-    st.code("""https://www.youtube.com/@handle          ← 主页链接（最常见）
-https://www.youtube.com/channel/UCxxxx…  ← 频道ID链接
-https://www.youtube.com/user/xxx         ← 老式用户名链接
-https://www.youtube.com/c/xxx            ← 老式自定义链接
-https://www.youtube.com/shorts/xxxx      ← 视频/Shorts链接，自动找到所属频道
-https://youtu.be/xxxx                    ← 视频分享链接，同上
-@handle / UCxxxx…                        ← 只粘贴这个也行""", language=None)
-    st.caption("带参数（?si=…、?sub_confirmation=1）、带 /videos 等子页面、m./music. 开头都能自动识别；视频链接会自动反查它属于哪个频道。")
+    st.markdown("**每行一个：链接 + 空格 + 发邮件日期（日期可不写，不写按今天算）：**")
+    st.code("""https://www.youtube.com/@handle 2026-08-01   ← 链接 + 发邮件日期（推荐）
+https://www.youtube.com/@handle              ← 不写日期就按今天
+@handle 2026/7/15                            ← 只粘贴handle也行，日期格式随意
+https://youtu.be/xxxx 2026년7월15일           ← 视频链接也行，韩语日期也认识""", language=None)
+    st.caption("链接什么格式都行：主页链接、/channel/UC…、老式 /user/ 和 /c/ 链接、视频/Shorts 链接（自动反查所属频道）、m./music. 开头、带参数（?si=…）都能识别。")
     st.markdown("")
 
     import_text = st.text_area(
@@ -2306,8 +2303,11 @@ https://youtu.be/xxxx                    ← 视频分享链接，同上
     with col_i1:
         import_status = st.selectbox("导入后标记为", ["已发邮件", "新发现"])
     with col_i2:
-        st.markdown("")
-        st.markdown("")
+        update_existing = st.checkbox(
+            "库里已有的博主：顺便更新状态和日期",
+            value=True,
+            help="上次导入过的博主会按这次的标记和发邮件日期刷新；关掉则已有的不动",
+        )
 
     if st.button("📥 开始导入", use_container_width=True):
         if not import_text.strip():
@@ -2315,9 +2315,15 @@ https://youtu.be/xxxx                    ← 视频分享链接，同上
         elif not st.session_state.api_key:
             st.error("需要 YouTube API Key 来查询频道信息")
         else:
-            # 解析输入：每行一个，格式转换统一交给 resolve_channel_ids
-            # （UC ID 直接用；@handle 和链接会自动反查成频道ID；无法识别的计入失败）
-            lines = [l.strip() for l in import_text.strip().split("\n") if l.strip()]
+            # 解析输入：每行 = 链接 + 可选的发邮件日期（行尾），格式转换交给 resolve_channel_ids
+            raw_lines = [l.strip() for l in import_text.strip().split("\n") if l.strip()]
+            lines, line_dates = [], {}
+            for rl in raw_lines:
+                link, d = split_line_date(rl)
+                if link:
+                    lines.append(link)
+                    if d:
+                        line_dates[link] = d
 
             if not lines:
                 st.error("未能解析出有效的频道ID")
@@ -2329,9 +2335,16 @@ https://youtu.be/xxxx                    ← 视频分享链接，同上
                             lines, st.session_state.api_key,
                             st.session_state.quota, status=import_status,
                             imported_by=st.session_state.user_name,
+                            line_dates=line_dates, update_existing=update_existing,
                         )
-                        msg = (f"✅ 导入完成：成功 {result['success']}，"
-                               f"跳过（已存在）{result['skipped']}，失败 {result['failed']}")
+                        parts = [f"新增 {result['success']}"]
+                        if result.get("updated"):
+                            parts.append(f"更新 {result['updated']}")
+                        skipped_left = result["skipped"] - result.get("updated", 0)
+                        if skipped_left > 0:
+                            parts.append(f"跳过（已存在）{skipped_left}")
+                        parts.append(f"失败 {result['failed']}")
+                        msg = "✅ 导入完成：" + "，".join(parts)
                         if result["failed"] > 0:
                             msg += "（失败 = 链接格式无法识别，或频道已不存在）"
                         st.success(msg)
@@ -2342,18 +2355,32 @@ https://youtu.be/xxxx                    ← 视频分享链接，同上
                             )
                     else:
                         # 本地模式
-                        resolved, bad_lines = resolve_channel_ids(
+                        resolved, bad_lines, raw_map = resolve_channel_ids(
                             lines, st.session_state.api_key, st.session_state.quota)
                         chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
-                        added = 0
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        have = {c.get("channel_id"): c for c in st.session_state.local_db}
+                        added, updated = 0, 0
                         for cid, info in chs.items():
+                            sent = line_dates.get(raw_map.get(cid, "")) or today
+                            if cid in have:
+                                if update_existing:
+                                    rec = have[cid]
+                                    rec["status"] = import_status
+                                    rec["status_date"] = now
+                                    if import_status == "已发邮件":
+                                        rec["email_sent_date"] = sent
+                                    updated += 1
+                                continue
                             info["status"] = import_status
-                            info["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            info["status_date"] = now
+                            info["email_sent_date"] = sent if import_status == "已发邮件" else None
                             info["discovered_by"] = st.session_state.user_name
                             info["notes"] = "批量导入"
                             st.session_state.local_db.append(info)
                             added += 1
-                        st.success(f"✅ 已导入 {added} 个频道（本地模式），无法识别 {len(bad_lines)} 行")
+                        st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
                         if bad_lines:
                             st.warning(
                                 "以下行导入失败，请检查后重试：\n\n"

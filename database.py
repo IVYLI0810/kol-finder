@@ -308,24 +308,49 @@ class InfluencerDB:
     # ============================================================
 
     def import_existing(self, channel_ids: list[str], api_key: str, quota,
-                        status: str = "已引入", imported_by: str = "") -> dict:
+                        status: str = "已发邮件", imported_by: str = "",
+                        line_dates: dict = None, update_existing: bool = False) -> dict:
         """
         导入已有网红名单（通过频道ID或链接）
-        返回：{"success": int, "skipped": int, "failed": int, "failed_lines": [str]}
+        line_dates: 原始行文本（去掉日期后的链接部分）→ 发邮件日期（YYYY-MM-DD）
+        update_existing: 库里已有的博主是否顺便更新状态和发邮件日期
+        返回：{"success": int, "updated": int, "skipped": int, "failed": int, "failed_lines": [str]}
         """
         from youtube_api import get_channels, resolve_channel_ids
 
-        result = {"success": 0, "skipped": 0, "failed": 0, "failed_lines": []}
+        line_dates = line_dates or {}
+        result = {"success": 0, "updated": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
         # 先把混合格式（UC ID / @handle / 各种链接 / 视频链接）统一解析成频道ID
         # 实在无法识别的行计入 failed 并记录原文，不再静默吞掉
-        resolved_ids, unresolvable = resolve_channel_ids(channel_ids, api_key, quota)
+        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(channel_ids, api_key, quota)
         result["failed"] += len(unresolvable)
         result["failed_lines"] = list(unresolvable)
 
-        # 过滤已存在的
+        # 区分已存在 / 新博主
+        existing_ids = [cid for cid in resolved_ids if self.exists(cid)]
         new_ids = [cid for cid in resolved_ids if not self.exists(cid)]
-        result["skipped"] = len(resolved_ids) - len(new_ids)
+        result["skipped"] = len(existing_ids)
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        def _sent_date_for(cid: str) -> str:
+            """按原始行找到这行写的发邮件日期，没写就按今天。"""
+            raw = raw_by_id.get(cid, "")
+            return (line_dates.get(raw) or today)
+
+        # 已有博主：按开关决定是否同步更新状态和发邮件日期
+        if update_existing and existing_ids:
+            for cid in existing_ids:
+                update_data = {"status": status, "status_date": now}
+                if status == "已发邮件":
+                    update_data["email_sent_date"] = _sent_date_for(cid)
+                try:
+                    self.client.table(self.TABLE_NAME).update(update_data).eq("channel_id", cid).execute()
+                    result["updated"] += 1
+                except Exception:
+                    result["failed"] += 1
 
         if not new_ids:
             return result
@@ -333,7 +358,6 @@ class InfluencerDB:
         # 批量获取频道信息
         channels = get_channels(new_ids, api_key, quota)
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
         for cid, info in channels.items():
             record = {
                 "channel_id": cid,
@@ -355,9 +379,9 @@ class InfluencerDB:
                 "status": status,
                 "status_date": now,
                 "discovered_by": imported_by,
-                "email_sent_date": now if status == "已引入" else None,
-                "introduced_date": now if status == "已引入" else None,
-                "notes": "批量导入（已有合作）",
+                "email_sent_date": _sent_date_for(cid) if status == "已发邮件" else None,
+                "introduced_date": None,
+                "notes": "批量导入",
                 "added_date": now,
                 "last_checked": now,
             }
