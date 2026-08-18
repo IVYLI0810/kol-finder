@@ -467,7 +467,14 @@ class InfluencerDB:
                     pass
 
         rows = self.get_all()
-        sparse = [r for r in rows if not (r.get("score_detail") or "").strip().startswith("{")]
+
+        def _is_sparse(r):
+            sd = r.get("score_detail")
+            if isinstance(sd, dict):
+                return not sd
+            return not str(sd or "").strip().startswith("{")
+
+        sparse = [r for r in rows if _is_sparse(r) and r.get("channel_id")]
         if limit:
             sparse = sparse[:limit]
         res = {"total": len(sparse), "done": 0, "gone": 0, "failed": 0}
@@ -506,34 +513,36 @@ class InfluencerDB:
                 except Exception:
                     pass
                 for r, f in enriched:
-                    if f.get("ai_category"):
-                        f["category"] = f["ai_category"]
                     try:
-                        f["scores"] = score_channel(f)
-                    except Exception:
-                        f["scores"] = {"total": 0}
-                    upd = {
-                        "category": f.get("category", ""),
-                        "subscribers": f.get("subscribers", 0),
-                        "avg_views_30d": f.get("avg_views_30d", 0),
-                        "view_sub_ratio": f.get("view_sub_ratio", 0),
-                        "last_upload": f.get("last_upload", ""),
-                        "score_total": f.get("scores", {}).get("total", 0),
-                        "score_detail": json.dumps({
-                            "scores": f.get("scores", {}),
-                            "ai_category": f.get("ai_category", ""),
-                            "ai_relevance": f.get("ai_relevance", ""),
-                            "ai_tags": f.get("ai_tags", []),
-                            "ai_analyzed": f.get("ai_analyzed", False),
-                        }, ensure_ascii=False),
-                        "emails": ", ".join(f.get("emails", [])),
-                        "has_commercial": f.get("commercial_history", {}).get("has_commercial", False),
-                        "commercial_evidence": ", ".join(f.get("commercial_history", {}).get("evidence", [])),
-                        "recent_titles": " / ".join(f.get("recent_titles", [])[:3]),
-                        "thumbnails": str(f.get("recent_thumbnails", [])),
-                        "last_checked": now,
-                    }
-                    try:
+                        if f.get("ai_category"):
+                            f["category"] = f["ai_category"]
+                        try:
+                            f["scores"] = score_channel(f)
+                        except Exception:
+                            f["scores"] = {"total": 0}
+                        emails = f.get("emails") or []
+                        ch = f.get("commercial_history") or {}
+                        upd = {
+                            "category": str(f.get("category") or ""),
+                            "subscribers": f.get("subscribers") or 0,
+                            "avg_views_30d": f.get("avg_views_30d") or 0,
+                            "view_sub_ratio": f.get("view_sub_ratio") or 0,
+                            "last_upload": str(f.get("last_upload") or ""),
+                            "score_total": (f.get("scores") or {}).get("total", 0),
+                            "score_detail": json.dumps({
+                                "scores": f.get("scores") or {},
+                                "ai_category": f.get("ai_category") or "",
+                                "ai_relevance": f.get("ai_relevance", ""),
+                                "ai_tags": f.get("ai_tags") or [],
+                                "ai_analyzed": bool(f.get("ai_analyzed", False)),
+                            }, ensure_ascii=False, default=str),
+                            "emails": ", ".join(str(e) for e in emails),
+                            "has_commercial": bool(ch.get("has_commercial", False)),
+                            "commercial_evidence": ", ".join(str(e) for e in (ch.get("evidence") or [])),
+                            "recent_titles": " / ".join(str(t) for t in (f.get("recent_titles") or [])[:3]),
+                            "thumbnails": str(f.get("recent_thumbnails") or []),
+                            "last_checked": now,
+                        }
                         self.client.table(self.TABLE_NAME).update(upd).eq("channel_id", r["channel_id"]).execute()
                         res["done"] += 1
                     except Exception:
