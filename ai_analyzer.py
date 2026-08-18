@@ -138,6 +138,45 @@ def _extract_json_array(text: str) -> list | None:
     return None
 
 
+def _extract_json_object(text: str) -> dict | None:
+    """从模型回复里提取第一个能解析成功的 JSON 对象（括号配对扫描，容忍代码块/前后杂文）。"""
+    if not text:
+        return None
+    t = text.strip()
+    try:
+        data = json.loads(t)
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, ValueError):
+        pass
+    start = t.find("{")
+    while start != -1:
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(t)):
+            c = t[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            data = json.loads(t[start:i + 1])
+                            return data if isinstance(data, dict) else None
+                        except (json.JSONDecodeError, ValueError):
+                            break
+        start = t.find("{", start + 1)
+    return None
+
+
 def _channel_brief(ch: dict, idx: int) -> dict:
     """把一个频道的信息压缩成给 AI 看的简报（控制 token 消耗）"""
     desc = (ch.get("description") or "").replace("\n", " ").strip()[:250]
@@ -384,6 +423,54 @@ def generate_keywords(vertical: str, count: int = 9, timeout: int = 60) -> tuple
     if not kws:
         return [], "AI没给出可用关键词，请换个说法重试"
     return kws, ""
+
+
+def generate_bd_email_ai(ch: dict, sender: str, kkt: str, baseline: str,
+                         timeout: int = 90) -> tuple[str, str, str]:
+    """AI 一键定制韩语 BD 邮件（邀请合作向，不推商品）。
+
+    ch: 网红记录（channel_name/ai_category/category/ai_tags/subscribers）
+    sender: 落款名；kkt: 카카오톡 ID；baseline: 团队官方模板正文（结构与关键信息基准）
+    返回 (主题, 正文, 错误信息)；失败时前两项为空串，调用方回退模板版。
+    """
+    if not ai_ready():
+        return "", "", "AI未配置（缺 DASHSCOPE_API_KEY）"
+    name = (ch.get("channel_name") or "").strip() or "크리에이터"
+    cat = (ch.get("ai_category") or ch.get("category") or "").strip()
+    tags = [t for t in (ch.get("ai_tags") or []) if t][:2]
+    subs = ch.get("subscribers") or 0
+    sender = (sender or "").strip() or "담당자"
+
+    prompt = f"""你是AliExpress韩国网红营销团队的韩语商务邮件专家。
+
+任务：对照下面的「官方模板」，为这位博主定制一封韩语合作邀请邮件，并写一个主题。
+
+[博主信息]
+频道名：{name}
+内容垂类：{cat or '未知'}
+内容标签：{'、'.join(tags) if tags else '无'}
+订阅量：{subs if subs else '未知'}
+
+[硬性规则]
+1. 邮件主目的是「诚挚邀请合作」。不要向对方推荐任何具体商品、不要指派带货任务；商品相关表述保留模板里「约2,500万个商品中自由选择」的原意。
+2. 保留模板的整体结构与全部关键信息：크리에이터가 하실 일 三步、크리에이터가 얻으실 혜택 四条（含制作费、手续费5~13%等数字）、参考视频三条链接、카카오톡联系段、落款。数字与链接一字不改。
+3. 只定制开头问候与「为什么选你」段落：结合博主的垂类/标签，自然、具体地写出对其内容方向的关注和契合点；严禁编造信息里没有的具体视频标题、播放量、评论等事实。
+4. 韩语商务敬语，真诚简洁；总篇幅与模板相差不超过两成。
+5. 落款固定写「{sender}」，카카오톡 ID 固定写「{kkt}」；开头自我介绍句固定写「알리익스프레스 마케팅팀 {sender}입니다.」，逐字照抄，不得重复或叠加词汇。
+
+[官方模板]
+{baseline}
+
+[输出] 只输出一个JSON对象，不要任何其他文字：
+{{"subject": "邮件主题", "body": "邮件正文全文"}}"""
+
+    content, err = _call_qwen(prompt, timeout=timeout)
+    if err:
+        return "", "", err
+    obj = _extract_json_object(content)
+    if not obj or not str(obj.get("body", "")).strip():
+        return "", "", "AI回复无法解析，请重试一次"
+    return str(obj.get("subject", "")).strip(), str(obj["body"]).strip(), ""
 
 
 # ============================================================

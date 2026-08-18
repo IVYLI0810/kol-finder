@@ -23,7 +23,8 @@ from youtube_api import (
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
     split_main_pending,
 )
-from ai_analyzer import analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL, generate_keywords
+from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL,
+                         generate_keywords, generate_bd_email_ai)
 
 # ============================================================
 # 团队公共库配置（写死在代码里，所有人共用，不用每次填）
@@ -898,23 +899,41 @@ def generate_email_draft(ch: dict, user_name: str, kkt_id: str) -> tuple[str, st
 
 @st.dialog("📧 BD邮件草稿", width="large")
 def bd_email_dialog(rec):
-    """弹窗展示个性化 BD 邮件：主题可改，正文一键复制。"""
+    """弹窗展示个性化 BD 邮件：秒开模板版，可一键AI定制；主题可改，正文一键复制。"""
     cid = rec.get("channel_id", "")
     # 落款优先用"邮件署名"（韩文/英文名），没填才回退到内部中文名
     sender = st.session_state.config.get("sender_name", "") or st.session_state.user_name
     kkt = st.session_state.config.get("kkt_id", "")
-    subj, body = generate_email_draft(rec, sender, kkt)
+    subj_t, body_t = generate_email_draft(rec, sender, kkt)
+    sk, bk = f"dlg_subj_{cid}", f"dlg_body_{cid}"
+    st.session_state.setdefault(sk, subj_t)
+    st.session_state.setdefault(bk, body_t)
 
-    st.caption("已自动填入该博主信息和你的专属署名。点正文块右上角 📋 图标即可一键复制，粘贴到阿里邮箱发送。")
-    st.text_input("邮件主题（可改）", value=subj, key=f"dlg_subj_{cid}")
+    st.caption("已自动填入该博主信息和你的专属署名。想要更定制的版本，点「✨ 一键AI定制」。")
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        ai_btn = st.button("✨ 一键AI定制", key=f"aimail_{cid}", use_container_width=True)
+    with c2:
+        st.caption("🤖 AI 按该博主垂类/标签定制开头和「为什么选你」，模板骨架与关键信息不变")
+    if ai_btn:
+        with st.spinner("🤖 AI 正在定制这封邮件…"):
+            s2, b2, err = generate_bd_email_ai(rec, sender, kkt, body_t)
+        if err:
+            st.warning(f"AI 定制没成功（{err}），已保留模板版")
+        else:
+            st.session_state[sk] = s2
+            st.session_state[bk] = b2
+            st.toast("✅ AI 定制完成，可继续微调后复制")
+
+    st.text_input("邮件主题（可改）", key=sk)
 
     with st.expander("✏️ 微调正文（可选 · 展开编辑）"):
-        body = st.text_area("正文", value=body, height=240, key=f"dlg_body_{cid}",
-                            label_visibility="collapsed")
+        st.text_area("正文", key=bk, height=240, label_visibility="collapsed")
         st.caption("改完后，下方复制块会同步更新")
 
     st.markdown("##### 📋 邮件正文（点右上角图标一键复制）")
-    st.code(body, language=None)
+    st.code(st.session_state[bk], language=None)
 
 
 # ---------- 缩略图服务端代理 ----------
