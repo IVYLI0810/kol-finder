@@ -654,6 +654,20 @@ def _on_batch_check(cid: str):
         st.session_state.batch_selected.discard(cid)
 
 
+def _on_row_status_change(cid: str, rec: dict, widget_key: str):
+    """状态下拉的 on_change 回调：只有用户真的拨动下拉才触发。
+    旧写法在每次渲染时比较「下拉值≠库状态」就改库，批量改状态后
+    下拉残留的旧值会被误判成用户操作、把刚改的状态改回去。"""
+    val = st.session_state.get(widget_key)
+    if not val or val == rec.get("status", "新发现"):
+        return
+    _apply_status_change(rec, val)
+    _count_records.clear()
+    _get_paginated_records.clear()
+    _get_dedup_records.clear()
+    st.session_state["_status_change_msg"] = f"✅ 「{rec.get('channel_name', '')}」已改为 {val}"
+
+
 def _clear_batch_selection():
     """清空所有批量勾选状态"""
     cids = list(st.session_state.get("batch_selected", set()))
@@ -1643,7 +1657,8 @@ with tab_search:
 # Tab 2: 网红库
 # ============================================================
 
-with tab_database:
+@st.fragment
+def _library_fragment():
     st.markdown("### 网红库")
     st.markdown("")
 
@@ -1882,7 +1897,7 @@ with tab_database:
             with bc3:
                 do_batch_refresh = st.button("🔄 刷新选中", key="batch_do_refresh", use_container_width=True)
             with bc4:
-                do_batch_delete = st.button("🗑 批量删除", key="batch_do_delete", use_container_width=True, type="primary")
+                do_batch_delete = st.button("🗑 批量删除", key="batch_do_delete", use_container_width=True)
             with bc5:
                 do_batch_export = st.button("📥 导出选中", key="batch_do_export", use_container_width=True)
 
@@ -1908,6 +1923,10 @@ with tab_database:
                             if reason:
                                 lr["notes"] = _append_reason(lr.get("notes", "") or "", new_status, reason)
                     n = len(cids)
+                # 同步行内下拉的组件状态，避免刷新后显示旧值
+                for cid in cids:
+                    st.session_state[f"lst_{cid}"] = new_status
+                    st.session_state[f"st_{cid}"] = new_status
                 _count_records.clear()
                 _get_paginated_records.clear()
                 _get_dedup_records.clear()
@@ -1935,7 +1954,7 @@ with tab_database:
                     )
                     brc1, brc2, _ = st.columns([1, 1, 4])
                     with brc1:
-                        if st.button("✅ 确认修改", key="batch_reason_ok", use_container_width=True, type="primary"):
+                        if st.button("✅ 确认修改", key="batch_reason_ok", use_container_width=True):
                             if _batch_reason.strip():
                                 _batch_apply(batch_new_status, _batch_reason)
                             else:
@@ -1999,7 +2018,7 @@ with tab_database:
                 st.warning(f"⚠️ 确定要删除选中的 {len(_batch_sel)} 人吗？此操作不可恢复！")
                 dc1, dc2, _ = st.columns([1, 1, 4])
                 with dc1:
-                    if st.button("确定删除", key="batch_confirm_del", type="primary"):
+                    if st.button("确定删除", key="batch_confirm_del"):
                         _db_b = get_db()
                         cids = list(_batch_sel)
                         if _db_b:
@@ -2099,40 +2118,14 @@ with tab_database:
                             """)
 
                             # 状态下拉（只保留 新发现 / 已发邮件 两个状态）
+                            # key 按频道ID存 + on_change 回调保存：批量改状态不会被残留旧值改回去
                             _ST_OPTS = ["新发现", "已发邮件"]
-                            if st.session_state.pop(f"revert_st_{idx}", False):
-                                # 取消后还原下拉：必须把 key 设回当前状态（pop 不掉前端组件状态）
-                                st.session_state[f"st_{idx}"] = status if status in _ST_OPTS else "新发现"
-                            new_status = st.selectbox(
+                            st.selectbox(
                                 "状态", _ST_OPTS,
                                 index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
-                                key=f"st_{idx}", label_visibility="collapsed",
+                                key=f"st_{_cid}", label_visibility="collapsed",
+                                on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
                             )
-                            if new_status in ("已拒绝", "已淘汰") and new_status != status:
-                                _reason = st.text_input(
-                                    "原因（必填）", key=f"rsn_st_{idx}",
-                                    placeholder="例：内容不垂直 / 要价太高…",
-                                )
-                                _c1, _c2, _ = st.columns([1, 1, 2])
-                                with _c1:
-                                    if st.button("确认", key=f"cfm_st_{idx}", use_container_width=True, type="primary"):
-                                        if _reason.strip():
-                                            _apply_status_change(rec, new_status, _reason)
-                                            st.session_state["_status_change_msg"] = \
-                                                f"✅ 「{name}」已改为 {new_status}，原因已记入备注"
-                                            st.rerun()
-                                        else:
-                                            st.session_state[f"rsnerr_st_{idx}"] = True
-                                with _c2:
-                                    if st.button("取消", key=f"ccl_st_{idx}", use_container_width=True):
-                                        st.session_state[f"revert_st_{idx}"] = True
-                                        st.rerun()
-                                if st.session_state.pop(f"rsnerr_st_{idx}", False):
-                                    st.warning("⚠️ 请先填写原因再确认")
-                            elif new_status != status:
-                                _apply_status_change(rec, new_status)
-                                st.session_state["_status_change_msg"] = f"✅ 「{name}」已改为 {new_status}"
-                                st.rerun()
 
                             # 刷新 / 删除 / 备注
                             c_rc, c_rm, c_nt = st.columns([1, 1, 4])
@@ -2212,13 +2205,11 @@ with tab_database:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
                         _ST_OPTS_L = ["新发现", "已发邮件"]
-                        if st.session_state.pop(f"revert_lst_{idx}", False):
-                            # 取消后还原下拉：必须把 key 设回当前状态（pop 不掉前端组件状态）
-                            st.session_state[f"lst_{idx}"] = status if status in _ST_OPTS_L else "新发现"
-                        new_status = st.selectbox(
+                        st.selectbox(
                             "状态", _ST_OPTS_L,
                             index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
-                            key=f"lst_{idx}", label_visibility="collapsed",
+                            key=f"lst_{_cid}", label_visibility="collapsed",
+                            on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
                         )
                         _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
                         if _status_date:
@@ -2240,33 +2231,6 @@ with tab_database:
                             do_mail = st.button("📧 邮件", key=f"lmail_{idx}", use_container_width=True)
                         if do_mail:
                             bd_email_dialog(rec)
-
-                    # 状态变更处理（整行展示，拒绝/淘汰必须填原因）
-                    if new_status in ("已拒绝", "已淘汰") and new_status != status:
-                        _rl = st.text_input(
-                            f"将「{name}」标为 {new_status} 的原因（必填）", key=f"rsn_lst_{idx}",
-                            placeholder="例：内容不垂直 / 要价太高 / 长期不回复…",
-                        )
-                        _lc1, _lc2, _ = st.columns([2, 2, 6])
-                        with _lc1:
-                            if st.button("确认修改", key=f"cfm_lst_{idx}", use_container_width=True, type="primary"):
-                                if _rl.strip():
-                                    _apply_status_change(rec, new_status, _rl)
-                                    st.session_state["_status_change_msg"] = \
-                                        f"✅ 「{name}」已改为 {new_status}，原因已记入备注"
-                                    st.rerun()
-                                else:
-                                    st.session_state[f"rsnerr_lst_{idx}"] = True
-                        with _lc2:
-                            if st.button("取消", key=f"ccl_lst_{idx}", use_container_width=True):
-                                st.session_state[f"revert_lst_{idx}"] = True
-                                st.rerun()
-                        if st.session_state.pop(f"rsnerr_lst_{idx}", False):
-                            st.warning("⚠️ 请先填写原因再确认")
-                    elif new_status != status:
-                        _apply_status_change(rec, new_status)
-                        st.session_state["_status_change_msg"] = f"✅ 「{name}」已改为 {new_status}"
-                        st.rerun()
 
                     # 单条刷新处理
                     if do_refresh:
@@ -2313,6 +2277,10 @@ with tab_database:
                 file_name=f"网红库_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
+
+
+with tab_database:
+    _library_fragment()
 
 
 # ============================================================
