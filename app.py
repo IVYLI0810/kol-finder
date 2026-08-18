@@ -709,12 +709,12 @@ if "local_db" not in st.session_state:
         },
         {
             "channel_id": "test_onboard_002",
-            "channel_name": "测试频道-已引入",
+            "channel_name": "测试频道-已发邮件2",
             "channel_url": "https://www.youtube.com/@testonboard",
             "category": "家居收纳",
             "subscribers": 8500,
             "score_total": 78,
-            "status": "已引入",
+            "status": "已发邮件",
             "discovered_by": "测试员",
             "emails": "onboard@example.com",
             "notes": "本地测试数据",
@@ -1666,7 +1666,7 @@ with tab_database:
             "全部", tuple(), "全部", "",
         )
         status_counts = {}
-        for s in ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]:
+        for s in ["新发现", "已发邮件"]:
             status_counts[s] = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 s, tuple(), "全部", "",
@@ -1674,7 +1674,7 @@ with tab_database:
     else:
         all_local = st.session_state.local_db
         total_count = len(all_local)
-        status_counts = {s: 0 for s in ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]}
+        status_counts = {s: 0 for s in ["新发现", "已发邮件"]}
         for r in all_local:
             s = r.get("status", "")
             if s in status_counts:
@@ -1683,9 +1683,9 @@ with tab_database:
     if total_count == 0:
         st.info("网红库为空。搜索后点击「加入网红库」，或使用「📥 批量导入」添加已有合作博主。")
     else:
-        cols = st.columns(6)
-        labels = ["总数", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
-        keys = ["total", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+        cols = st.columns(3)
+        labels = ["总数", "新发现", "已发邮件"]
+        keys = ["total", "新发现", "已发邮件"]
         values = [total_count] + [status_counts[k] for k in keys[1:]]
         for col, label, val in zip(cols, labels, values):
             with col:
@@ -1697,7 +1697,7 @@ with tab_database:
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             st.selectbox(
-                "状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
+                "状态", ["全部", "新发现", "已发邮件"],
                 key="filter_status", on_change=_reset_db_page,
             )
         with col_f2:
@@ -1836,7 +1836,7 @@ with tab_database:
             bc1, bc2, bc3, bc4, bc5 = st.columns([2, 1.4, 1.4, 1.4, 1.4])
             with bc1:
                 batch_new_status = st.selectbox(
-                    "目标状态", ["已发邮件", "已引入", "已拒绝", "已淘汰", "新发现"],
+                    "目标状态", ["已发邮件", "新发现"],
                     key="batch_status_select", label_visibility="collapsed",
                 )
             with bc2:
@@ -2029,9 +2029,8 @@ with tab_database:
                                         help="勾选后可批量操作")
 
                             status = rec.get("status", "新发现")
-                            status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
-                                           "已引入": "status-onboard", "已拒绝": "status-reject",
-                                           "已淘汰": "status-reject"}.get(status, "status-new")
+                            status_class = {"新发现": "status-new",
+                                           "已发邮件": "status-emailed"}.get(status, "status-new")
 
                             name = rec.get("channel_name", "未知")
                             url = rec.get("channel_url", "#")
@@ -2061,8 +2060,8 @@ with tab_database:
                             <hr class="kol-divider">
                             """)
 
-                            # 状态下拉（已拒绝/已淘汰 必须填原因+确认才写入，只选择不写库）
-                            _ST_OPTS = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                            # 状态下拉（只保留 新发现 / 已发邮件 两个状态）
+                            _ST_OPTS = ["新发现", "已发邮件"]
                             if st.session_state.pop(f"revert_st_{idx}", False):
                                 # 取消后还原下拉：必须把 key 设回当前状态（pop 不掉前端组件状态）
                                 st.session_state[f"st_{idx}"] = status if status in _ST_OPTS else "新发现"
@@ -2174,7 +2173,7 @@ with tab_database:
                     with r4:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
-                        _ST_OPTS_L = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                        _ST_OPTS_L = ["新发现", "已发邮件"]
                         if st.session_state.pop(f"revert_lst_{idx}", False):
                             # 取消后还原下拉：必须把 key 设回当前状态（pop 不掉前端组件状态）
                             st.session_state[f"lst_{idx}"] = status if status in _ST_OPTS_L else "新发现"
@@ -2305,7 +2304,7 @@ https://youtu.be/xxxx                    ← 视频分享链接，同上
 
     col_i1, col_i2 = st.columns([1, 1])
     with col_i1:
-        import_status = st.selectbox("导入后标记为", ["已引入", "已拒绝", "已发邮件", "新发现"])
+        import_status = st.selectbox("导入后标记为", ["已发邮件", "新发现"])
     with col_i2:
         st.markdown("")
         st.markdown("")
@@ -2458,18 +2457,11 @@ with tab_settings:
     st.markdown("")
     st.markdown("#### 🔁 去重规则（多少天后重新出现）")
     rules = config["dedup_rules"]
-    col_d1, col_d2, col_d3, col_d4, col_d5 = st.columns(5)
+    col_d1, col_d2 = st.columns(2)
     with col_d1:
-        d_onboard = st.number_input("已引入（-1=永久）", value=rules["onboarded_days"], step=1)
-    with col_d2:
-        d_reject = st.number_input("已拒绝（天）", value=rules["rejected_days"], step=7)
-    with col_d3:
         d_email = st.number_input("已发邮件（天）", value=rules["emailed_days"], step=1)
-    with col_d4:
+    with col_d2:
         d_discover = st.number_input("新发现（天）", value=rules["discovered_days"], step=1)
-    with col_d5:
-        d_elim = st.number_input("已淘汰（天）", value=rules.get("eliminated_days", 90), step=30,
-                                 help="被淘汰的博主过这么多天后可以重新被挖到（-1=永久不再出现）")
 
     # 保存按钮
     st.markdown("")
@@ -2490,9 +2482,10 @@ with tab_settings:
             },
             "ai_min_relevance": new_ai_gate,
             "dedup_rules": {
-                "onboarded_days": d_onboard, "rejected_days": d_reject,
+                "onboarded_days": rules.get("onboarded_days", -1),
+                "rejected_days": rules.get("rejected_days", 90),
                 "emailed_days": d_email, "discovered_days": d_discover,
-                "eliminated_days": d_elim,
+                "eliminated_days": rules.get("eliminated_days", 90),
             },
             # BD邮件身份在左侧身份栏维护，这里原样保留，避免保存评分设置时丢失
             "sender_name": st.session_state.config.get("sender_name", ""),
