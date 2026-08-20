@@ -17,6 +17,15 @@ import requests
 
 from streamlit_local_storage import LocalStorage
 
+# Streamlit 常驻进程不会重新 import 改过的本地模块（云端部署后 database 等
+# 还是旧代码，新 app.py 调旧方法直接 TypeError）。每次运行强制重载磁盘最新代码。
+import importlib as _importlib
+import database as _database_mod
+import youtube_api as _youtube_mod
+import ai_analyzer as _ai_mod
+for _m in (_database_mod, _youtube_mod, _ai_mod):
+    _importlib.reload(_m)
+
 from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
