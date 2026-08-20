@@ -313,7 +313,7 @@ def get_channels(channel_ids: list[str], api_key: str, quota: QuotaTracker) -> d
 
 _UC_ID_RE = re.compile(r'^UC[A-Za-z0-9_-]{22}$')
 _VIDEO_ID_RE = re.compile(r'^[A-Za-z0-9_-]{11}$')
-_HANDLE_CHARS_RE = re.compile(r'^[A-Za-z0-9._-]{3,30}$')
+_HANDLE_CHARS_RE = re.compile(r'^[\w.-]{3,30}$')
 
 
 def _parse_date_token(tok: str):
@@ -473,8 +473,8 @@ def _classify_youtube_input(raw) -> tuple[str, str]:
         m = re.search(r'/channel/(UC[A-Za-z0-9_-]{22})', path)
         if m:
             return ("channel_id", m.group(1))
-        # /@handle（可能带子页面）
-        m = re.match(r'^/@([A-Za-z0-9._-]+)', path)
+        # /@handle（可能带子页面；韩文等 Unicode 或 %XX 编码形式都支持）
+        m = re.match(r'^/@([\w.-]+)', unquote(path))
         if m:
             return ("handle", '@' + m.group(1))
         # 老式 /user/用户名
@@ -502,14 +502,14 @@ def _classify_youtube_input(raw) -> tuple[str, str]:
         # 播放列表、搜索页：明确不是频道
         if path.startswith('/playlist') or path.startswith('/results'):
             return ("invalid", s)
-        # 单段裸路径（youtube.com/某名字）：按自定义名处理
+        # 单段裸路径（youtube.com/某名字）：按自定义名处理（支持韩文等）
         segs = [x for x in path.split('/') if x]
-        if len(segs) == 1 and re.match(r'^[A-Za-z0-9._-]+$', segs[0]):
+        if len(segs) == 1 and re.match(r'^[\w.-]+$', unquote(segs[0])):
             return ("custom", unquote(segs[0]))
         return ("invalid", s)
 
-    # 非链接的纯文本：handle 风格的词碰运气反查；含@的（邮箱等）直接判非频道
-    if re.match(r'^[A-Za-z0-9._-]+$', s):
+    # 非链接的纯文本：handle 风格的词碰运气反查（含韩文等）；含@的（邮箱等）直接判非频道
+    if re.match(r'^[\w.-]+$', s):
         return ("unknown_token", s)
     return ("invalid", s)
 
@@ -593,10 +593,13 @@ def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -
         if kind == "channel_id":
             results[i] = value
 
-    # handle：逐个 forHandle 反查（1 unit/个）
+    # handle：逐个 forHandle 反查（1 unit/个）；查不到再抓网页兜底（零配额）
     for i, kind, value, _raw in tasks:
         if kind == "handle":
             cid = _resolve_handle(value, api_key, quota)
+            if not cid:
+                cid = _fetch_channel_id_from_html(
+                    f"https://www.youtube.com/@{quote(value[1:])}")
             if cid:
                 results[i] = cid
 
