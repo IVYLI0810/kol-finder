@@ -1831,6 +1831,21 @@ def _library_fragment():
         _get_paginated_records.clear()
         _get_dedup_records.clear()
 
+    def _save_category(cid: str, name: str):
+        """垂类框 on_change 回调：失焦/回车时保存（手动修正 AI 垂类判定）"""
+        val = st.session_state.get(f"cat_{cid}", "").strip()
+        _db = get_db()
+        if _db:
+            _db.update_category(cid, val)
+        else:
+            for lr in st.session_state.local_db:
+                if lr.get("channel_id") == cid:
+                    lr["category"] = val
+        _count_records.clear()
+        _get_paginated_records.clear()
+        _get_dedup_records.clear()
+        st.session_state["_status_change_msg"] = f"✅ 「{name}」垂类已改为「{val or '空'}」"
+
     # 挖掘人选项（用成员表，避免全量扫 influencers）
     if db:
         discoverer_options = ["全部", "只看我的"] + db.get_members()
@@ -2260,18 +2275,29 @@ def _library_fragment():
 
                             # 状态下拉（手动只允许 新发现 / 已发邮件；已引入由 YTS 同步管理，只展示）
                             # key 按频道ID存 + on_change 回调保存：批量改状态不会被残留旧值改回去
-                            if status == "已引入":
-                                st.markdown(
-                                    '<div class="kol-introduced">✅ 已引入 · YTS履约</div>',
-                                    unsafe_allow_html=True,
-                                )
-                            else:
-                                _ST_OPTS = ["新发现", "已发邮件"]
-                                st.selectbox(
-                                    "状态", _ST_OPTS,
-                                    index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
-                                    key=f"st_{_cid}", label_visibility="collapsed",
-                                    on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
+                            # 垂类手动修正入口：AI 判得不准在这里改，保存后刷新/复查不会覆盖
+                            _c_st, _c_cat = st.columns([1, 1.5])
+                            with _c_st:
+                                if status == "已引入":
+                                    st.markdown(
+                                        '<div class="kol-introduced">✅ 已引入 · YTS履约</div>',
+                                        unsafe_allow_html=True,
+                                    )
+                                else:
+                                    _ST_OPTS = ["新发现", "已发邮件"]
+                                    st.selectbox(
+                                        "状态", _ST_OPTS,
+                                        index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
+                                        key=f"st_{_cid}", label_visibility="collapsed",
+                                        on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
+                                    )
+                            with _c_cat:
+                                st.text_input(
+                                    "垂类", value=cat, key=f"cat_{_cid}",
+                                    placeholder="AI判得不准？点这里改",
+                                    label_visibility="collapsed",
+                                    help="手动修正 AI 垂类判定，保存后不会被刷新/复查覆盖",
+                                    on_change=_save_category, args=(_cid, name),
                                 )
 
                             # 刷新 / 删除 / 备注

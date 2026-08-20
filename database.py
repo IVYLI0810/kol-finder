@@ -383,6 +383,14 @@ class InfluencerDB:
         except Exception:
             return False
 
+    def update_category(self, channel_id: str, category: str) -> bool:
+        """更新垂类（手动修正 AI 判定用；刷新/复查不会覆盖此字段）"""
+        try:
+            self.client.table(self.TABLE_NAME).update({"category": category}).eq("channel_id", channel_id).execute()
+            return True
+        except Exception:
+            return False
+
     def update_last_checked(self, channel_id: str, still_active: bool, new_data: dict = None) -> bool:
         """复查后更新"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
