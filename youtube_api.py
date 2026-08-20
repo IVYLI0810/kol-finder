@@ -565,13 +565,16 @@ def _resolve_custom(name: str, api_key: str, quota: QuotaTracker):
     return None
 
 
-def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -> tuple[list[str], list[str], dict]:
+def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker,
+                        fail_reasons: dict = None) -> tuple[list[str], list[str], dict]:
     """
     把混合输入统一解析成有效的 UC 频道ID（全格式版）。
     支持：UC频道ID / /channel/UC… / @handle（裸写或链接）/ 老式 /user/ 与 /c/ 链接 /
     youtube.com/裸名字 / 视频链接（watch、youtu.be、Shorts、直播、embed，自动反查所属频道）/
     m.、music.、studio. 子域名 / 带任意参数与子页面 / Excel超链接公式。
     返回：(按输入顺序去重后的有效频道ID列表, 无法解析的原始行列表, 频道ID→原始行映射)
+    fail_reasons（可选）：传入 dict 时，按 原始行→原因 写入，原因分
+    "格式无法识别" / "频道已不存在" / "视频链接失效" 三类，供页面分组提示。
     """
     tasks = []   # (序号, kind, value, 原始行)
     failed_lines = []
@@ -580,7 +583,10 @@ def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -
         if kind == "empty":
             continue
         if kind == "invalid":
-            failed_lines.append(_clean_line(raw))
+            cleaned = _clean_line(raw)
+            failed_lines.append(cleaned)
+            if fail_reasons is not None:
+                fail_reasons[cleaned] = "格式无法识别（不是频道链接/handle）"
             continue
         if kind == "unknown_token":
             kind, value = "handle", '@' + value
@@ -645,6 +651,9 @@ def resolve_channel_ids(raw_ids: list[str], api_key: str, quota: QuotaTracker) -
             raw_by_id[cid] = raw
         elif not cid:
             failed_lines.append(raw)
+            if fail_reasons is not None:
+                fail_reasons[raw] = ("视频链接失效，反查不到所属频道" if kind == "video_id"
+                                     else "频道已不存在（YouTube 查无此号）")
 
     return valid, failed_lines, raw_by_id
 

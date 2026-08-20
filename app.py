@@ -338,6 +338,19 @@ st.markdown("""
     .stButton button[data-testid="stBaseButton-primary"]:active {
         transform: translate(2px,2px); box-shadow: none !important;
     }
+    /* ---------- 弹窗里的 primary 按钮（如「确定移除」）：全局圆钮规则只服务行内图标钮，
+       弹窗里要恢复成黑色胶囊，否则文字被挤进圆里竖排 ---------- */
+    .stDialog button[data-testid="stBaseButton-primary"] {
+        width: 100% !important; height: 44px !important; min-height: 44px !important;
+        border-radius: 999px !important; padding: 0 26px !important;
+        background: #1c1c1e !important; color: #fff !important;
+    }
+    .stDialog button[data-testid="stBaseButton-primary"]:hover {
+        background: #33333a !important; color: #fff !important;
+    }
+    .stDialog button[data-testid="stBaseButton-primary"]:active {
+        transform: translate(3px,3px); box-shadow: none !important;
+    }
 
     /* ---------- Tabs：4个均分胶囊 · 白底=未选中 · 黑底=选中 · 黑描边+硬阴影 ---------- */
     .stTabs [role="tablist"] {
@@ -784,7 +797,7 @@ def get_all_records() -> list[dict]:
 
 
 @st.cache_data(ttl=45, show_spinner=False)
-def _count_records(db_url, db_key, status, category_tuple, discoverer, discoverer_name):
+def _count_records(db_url, db_key, status, category_tuple, discoverer, discoverer_name, search=""):
     """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
@@ -793,12 +806,13 @@ def _count_records(db_url, db_key, status, category_tuple, discoverer, discovere
         category=list(category_tuple) if category_tuple else None,
         discoverer=discoverer,
         discoverer_name=discoverer_name,
+        search=search,
     )
 
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
-                           discoverer, discoverer_name, sort_by, descending):
+                           discoverer, discoverer_name, sort_by, descending, search=""):
     """带缓存的分页查询（内部临时创建 DB 连接）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
@@ -811,6 +825,7 @@ def _get_paginated_records(db_url, db_key, page, page_size, status, category_tup
         discoverer_name=discoverer_name,
         sort_by=sort_by,
         descending=descending,
+        search=search,
     )
 
 
@@ -965,6 +980,58 @@ def bd_email_dialog(rec):
 
     st.markdown("##### 📋 邮件正文（点右上角图标一键复制）")
     st.code(st.session_state[bk], language=None)
+
+
+@st.dialog("🗑 从库中移除", width="small")
+def _remove_confirm_dialog(rec):
+    """单条删除二次确认弹窗：手滑点 🗑 不会直接丢数据。"""
+    name = rec.get("channel_name", "未知") or "未知"
+    st.warning(f"确定要把「{name}」从网红库移除吗？")
+    st.caption("移除后这条记录（含备注）就没了；之后想找回可以重新导入。")
+    c_ok, c_no = st.columns(2)
+    with c_ok:
+        do_ok = st.button("确定移除", type="primary", use_container_width=True)
+    with c_no:
+        do_no = st.button("取消", use_container_width=True)
+    if do_no:
+        st.rerun()
+    if do_ok:
+        _db = get_db()
+        cid = rec.get("channel_id", "")
+        if _db:
+            _db.remove(cid)
+        else:
+            st.session_state.local_db = [
+                r for r in st.session_state.local_db if r.get("channel_id") != cid]
+        _count_records.clear()
+        _get_paginated_records.clear()
+        _get_dedup_records.clear()
+        st.session_state["_status_change_msg"] = f"🗑 已移除「{name}」"
+        st.rerun()
+
+
+# 导入失败原因的展示顺序（常见的排前面）
+_FAIL_REASON_ORDER = [
+    "频道已不存在（YouTube 查无此号）",
+    "格式无法识别（不是频道链接/handle）",
+    "视频链接失效，反查不到所属频道",
+]
+
+
+def _show_import_failures(failed_lines: list, reasons: dict):
+    """导入失败行按原因分组展示，使用者一眼看出哪些该改格式、哪些是频道没了。"""
+    if not failed_lines:
+        return
+    groups: dict = {}
+    for line in failed_lines:
+        groups.setdefault(reasons.get(line, "其他原因"), []).append(line)
+    ordered = [r for r in _FAIL_REASON_ORDER if r in groups]
+    ordered += [r for r in groups if r not in _FAIL_REASON_ORDER]
+    parts = []
+    for reason in ordered:
+        lines = groups[reason]
+        parts.append(f"**{reason}** · {len(lines)} 行\n" + "\n".join(f"· {l}" for l in lines))
+    st.warning("以下行导入失败：\n\n" + "\n\n".join(parts))
 
 
 # ---------- 缩略图服务端代理 ----------
@@ -1797,6 +1864,13 @@ def _library_fragment():
 
         st.markdown("")
 
+        # 搜索（找特定的人：名字/邮箱/链接模糊匹配）
+        st.text_input(
+            "🔍 搜索", key="db_search", label_visibility="collapsed",
+            placeholder="🔍 搜频道名 / 邮箱 / 链接，例：망고 或 btlish",
+            on_change=_reset_db_page,
+        )
+
         # 筛选
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
@@ -1830,12 +1904,13 @@ def _library_fragment():
         sort_by = st.session_state.db_sort
         page_size = st.session_state.db_page_size
         page = st.session_state.db_page
+        search_q = (st.session_state.get("db_search") or "").strip()
 
         # 获取分页记录
         if db:
             filtered_count = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
-                status, category, discoverer, user_name,
+                status, category, discoverer, user_name, search_q,
             )
             total_pages = max(1, (filtered_count + page_size - 1) // page_size)
             if page > total_pages:
@@ -1844,6 +1919,7 @@ def _library_fragment():
             records_page = _get_paginated_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 page, page_size, status, category, discoverer, user_name, sort_by, True,
+                search_q,
             )
         else:
             sort_map = {
@@ -1861,6 +1937,11 @@ def _library_fragment():
                 local = [r for r in local if r.get("discovered_by") == user_name]
             elif discoverer != "全部":
                 local = [r for r in local if r.get("discovered_by") == discoverer]
+            if search_q:
+                ql = search_q.lower()
+                local = [r for r in local if ql in (r.get("channel_name", "") or "").lower()
+                         or ql in (r.get("emails", "") or "").lower()
+                         or ql in (r.get("channel_url", "") or "").lower()]
             local.sort(key=sort_map[sort_by], reverse=True)
             filtered_count = len(local)
             total_pages = max(1, (filtered_count + page_size - 1) // page_size)
@@ -2215,18 +2296,9 @@ def _library_fragment():
                                 else:
                                     st.error(msg)
 
-                            # 删除处理
+                            # 删除处理（弹窗二次确认，防手滑误删）
                             if do_remove:
-                                _db = get_db()
-                                cid = rec.get("channel_id", "")
-                                if _db:
-                                    _db.remove(cid)
-                                else:
-                                    st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                                _count_records.clear()
-                                _get_paginated_records.clear()
-                                _get_dedup_records.clear()
-                                st.rerun()
+                                _remove_confirm_dialog(rec)
         else:
             # 列表模式：一行一个博主，字段对齐成表格，适合快速扫全库
             for idx, rec in enumerate(records_page):
@@ -2307,18 +2379,9 @@ def _library_fragment():
                         else:
                             st.error(msg)
 
-                    # 删除处理
+                    # 删除处理（弹窗二次确认，防手滑误删）
                     if do_remove:
-                        _db = get_db()
-                        cid = rec.get("channel_id", "")
-                        if _db:
-                            _db.remove(cid)
-                        else:
-                            st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                        _count_records.clear()
-                        _get_paginated_records.clear()
-                        _get_dedup_records.clear()
-                        st.rerun()
+                        _remove_confirm_dialog(rec)
 
         # 导出
         st.markdown("---")
@@ -2450,17 +2513,16 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                     parts.append(f"失败 {result['failed']}")
                     msg = "✅ 导入完成：" + "，".join(parts)
                     if result["failed"] > 0:
-                        msg += "（失败 = 链接格式无法识别，或频道已不存在）"
+                        msg += "（失败原因见下方分组）"
                     st.success(msg)
                     if result.get("failed_lines"):
-                        st.warning(
-                            "以下行导入失败，请检查后重试：\n\n"
-                            + "\n\n".join(f"· {line}" for line in result["failed_lines"])
-                        )
+                        _show_import_failures(result["failed_lines"], result.get("failed_reasons", {}))
                 else:
                     # 本地模式
+                    _fail_reasons = {}
                     resolved, bad_lines, raw_map = resolve_channel_ids(
-                        lines, st.session_state.api_key, st.session_state.quota)
+                        lines, st.session_state.api_key, st.session_state.quota,
+                        _fail_reasons)
                     chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
                     # 和 Supabase 模式一样走补全（播放/邮箱/评分/AI 垂类）
                     from database import enrich_import_channels
@@ -2490,10 +2552,7 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                         added += 1
                     st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
                     if bad_lines:
-                        st.warning(
-                            "以下行导入失败，请检查后重试：\n\n"
-                            + "\n\n".join(f"· {line}" for line in bad_lines)
-                        )
+                        _show_import_failures(bad_lines, _fail_reasons)
 
     st.markdown("---")
     with st.expander("🔄 一键补全旧数据（以前导入、缺播放/评分/邮箱的老记录）"):

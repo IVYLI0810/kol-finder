@@ -140,8 +140,15 @@ class InfluencerDB:
         except Exception:
             return []
 
+    @staticmethod
+    def _search_or(search: str) -> str:
+        """搜索框 → Supabase or 过滤串：频道名/邮箱/链接 三列模糊匹配"""
+        q = search.strip().replace(",", " ")
+        return f"channel_name.ilike.%{q}%,emails.ilike.%{q}%,channel_url.ilike.%{q}%"
+
     def count_records(self, status: str = None, category: list[str] = None,
-                      discoverer: str = None, discoverer_name: str = "") -> int:
+                      discoverer: str = None, discoverer_name: str = "",
+                      search: str = "") -> int:
         """按当前筛选条件计数（用于分页）"""
         try:
             query = self.client.table(self.TABLE_NAME).select("*", count="exact")
@@ -154,6 +161,8 @@ class InfluencerDB:
                     query = query.eq("discovered_by", discoverer_name)
                 else:
                     query = query.eq("discovered_by", discoverer)
+            if search and search.strip():
+                query = query.or_(self._search_or(search))
             result = query.execute()
             return result.count or 0
         except Exception:
@@ -162,7 +171,8 @@ class InfluencerDB:
     def _build_paginated_query(self, fields: str, page: int, page_size: int,
                                status: str, category: list[str],
                                discoverer: str, discoverer_name: str,
-                               sort_by: str, descending: bool):
+                               sort_by: str, descending: bool,
+                               search: str = ""):
         """构建设分页查询（不执行）。"""
         query = self.client.table(self.TABLE_NAME).select(fields)
 
@@ -175,6 +185,8 @@ class InfluencerDB:
                 query = query.eq("discovered_by", discoverer_name)
             else:
                 query = query.eq("discovered_by", discoverer)
+        if search and search.strip():
+            query = query.or_(self._search_or(search))
 
         sort_col = self.SORT_COLUMNS.get(sort_by, "added_date")
         query = query.order(sort_col, desc=descending)
@@ -186,7 +198,8 @@ class InfluencerDB:
     def get_records_paginated(self, page: int = 1, page_size: int = 30,
                               status: str = None, category: list[str] = None,
                               discoverer: str = None, discoverer_name: str = "",
-                              sort_by: str = "添加时间", descending: bool = True) -> list[dict]:
+                              sort_by: str = "添加时间", descending: bool = True,
+                              search: str = "") -> list[dict]:
         """
         分页获取网红记录，筛选和排序都在 Supabase 服务端完成。
         只返回列表页需要的轻量字段，减少网络传输和内存占用。
@@ -194,7 +207,7 @@ class InfluencerDB:
         try:
             query = self._build_paginated_query(
                 self.LIGHT_FIELDS, page, page_size, status, category,
-                discoverer, discoverer_name, sort_by, descending,
+                discoverer, discoverer_name, sort_by, descending, search,
             )
             result = query.execute()
             return result.data or []
@@ -204,7 +217,7 @@ class InfluencerDB:
             try:
                 query = self._build_paginated_query(
                     self.LIGHT_FIELDS_FALLBACK, page, page_size, status, category,
-                    discoverer, discoverer_name, sort_by, descending,
+                    discoverer, discoverer_name, sort_by, descending, search,
                 )
                 result = query.execute()
                 return result.data or []
@@ -413,10 +426,13 @@ class InfluencerDB:
         result = {"success": 0, "updated": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
         # 先把混合格式（UC ID / @handle / 各种链接 / 视频链接）统一解析成频道ID
-        # 实在无法识别的行计入 failed 并记录原文，不再静默吞掉
-        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(channel_ids, api_key, quota)
+        # 实在无法识别的行计入 failed 并记录原文和原因，不再静默吞掉
+        fail_reasons = {}
+        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(
+            channel_ids, api_key, quota, fail_reasons)
         result["failed"] += len(unresolvable)
         result["failed_lines"] = list(unresolvable)
+        result["failed_reasons"] = fail_reasons
 
         # 区分已存在 / 新博主
         existing_ids = [cid for cid in resolved_ids if self.exists(cid)]
