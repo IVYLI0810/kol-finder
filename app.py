@@ -1110,7 +1110,6 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」（本地模式）")
     with col_a1b:
         if st.button("📧 入库+标已发邮件", key=f"{key_prefix}addmail_{rank}", use_container_width=True,
-                     type="primary",
                      help="一步完成：加入网红库并直接标记「已发邮件」（自动记录发邮件日期，自动流入 YTS）"):
             _db_m = get_db()
             _ok_m = False
