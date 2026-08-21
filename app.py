@@ -556,6 +556,7 @@ def _apply_status_change(rec: dict, new_status: str, reason: str = ""):
                     lr["notes"] = _append_reason(lr.get("notes", "") or "", new_status, reason)
                 break
     _count_records.clear()
+    _count_all_statuses.clear()
     _get_paginated_records.clear()
     _get_dedup_records.clear()
 
@@ -626,6 +627,7 @@ def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owne
                         lr["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                         break
             _count_records.clear()
+            _count_all_statuses.clear()
             _get_paginated_records.clear()
             _get_dedup_records.clear()
             return True, f"✅ {channel_name}：数据已刷新"
@@ -633,6 +635,7 @@ def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owne
             if _db:
                 _db.update_last_checked(channel_id, False)
             _count_records.clear()
+            _count_all_statuses.clear()
             _get_paginated_records.clear()
             _get_dedup_records.clear()
             return True, f"⚠️ {channel_name}：已标记为不活跃"
@@ -666,6 +669,7 @@ def _on_row_status_change(cid: str, rec: dict, widget_key: str):
         return
     _apply_status_change(rec, val)
     _count_records.clear()
+    _count_all_statuses.clear()
     _get_paginated_records.clear()
     _get_dedup_records.clear()
     st.session_state["_status_change_msg"] = f"✅ 「{rec.get('channel_name', '')}」已改为 {val}"
@@ -831,6 +835,14 @@ def _get_dedup_records(db_url, db_key):
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
     return db.get_dedup_records()
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _count_all_statuses(db_url, db_key):
+    """带缓存的全状态计数：一次请求拿到 总数+各状态数量（原来要发3次请求）"""
+    from database import InfluencerDB
+    db = InfluencerDB(db_url, db_key)
+    return db.count_by_status()
 
 
 # ============================================================
@@ -1077,6 +1089,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 if db.add_influencer(ch, st.session_state.user_name):
                     st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」")
                     _count_records.clear()
+                    _count_all_statuses.clear()
                     _get_paginated_records.clear()
                     _get_dedup_records.clear()
                 else:
@@ -1100,17 +1113,25 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
             _db_e = get_db()
             _ok_e = False
             if _db_e:
-                if _db_e.add_influencer(ch, st.session_state.user_name):
+                if _db_e.exists(ch["channel_id"]):
+                    # 已在库中：直接改状态（不能重复插入，会撞唯一约束）
+                    _ok_e = _db_e.update_status(ch["channel_id"], "已淘汰")
+                elif _db_e.add_influencer(ch, st.session_state.user_name):
                     _ok_e = _db_e.update_status(ch["channel_id"], "已淘汰")
             else:
-                # 本地模式
-                ch["status"] = "已淘汰"
-                ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                ch["discovered_by"] = st.session_state.user_name
-                st.session_state.local_db.append(ch)
+                # 本地模式：已在库则改状态，不在库则新增
+                _hit = [lr for lr in st.session_state.local_db if lr.get("channel_id") == ch["channel_id"]]
+                if _hit:
+                    _apply_status_date(_hit[0], "已淘汰")
+                else:
+                    ch["status"] = "已淘汰"
+                    ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    ch["discovered_by"] = st.session_state.user_name
+                    st.session_state.local_db.append(ch)
                 _ok_e = True
             if _ok_e:
                 _count_records.clear()
+                _count_all_statuses.clear()
                 _get_paginated_records.clear()
                 _get_dedup_records.clear()
                 st.session_state.search_results.remove(ch)
@@ -1592,13 +1613,26 @@ with tab_search:
 
             results = st.session_state.search_results
 
-            # 筛选
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                min_score_filter = st.slider("最低评分", 0, 100,
-                                             st.session_state.config.get("score_threshold", 45), step=5)
-            with col_f2:
-                sort_by = st.selectbox("排序", ["综合评分", "订阅量", "近30天均播", "最近更新"])
+            # 筛选（包进表单：拖动滑块/切换排序不刷新整页，点「应用筛选」才生效）
+            if "res_min_score" not in st.session_state:
+                st.session_state.res_min_score = st.session_state.config.get("score_threshold", 45)
+            if "res_sort" not in st.session_state:
+                st.session_state.res_sort = "综合评分"
+            with st.form("res_filter_form", clear_on_submit=False):
+                col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+                with col_f1:
+                    _f_score = st.slider("最低评分", 0, 100,
+                                         st.session_state.res_min_score, step=5)
+                with col_f2:
+                    _f_sort = st.selectbox("排序", ["综合评分", "订阅量", "近30天均播", "最近更新"],
+                                           index=["综合评分", "订阅量", "近30天均播", "最近更新"].index(st.session_state.res_sort))
+                with col_f3:
+                    _f_apply = st.form_submit_button("应用筛选", use_container_width=True)
+                if _f_apply:
+                    st.session_state.res_min_score = _f_score
+                    st.session_state.res_sort = _f_sort
+            min_score_filter = st.session_state.res_min_score
+            sort_by = st.session_state.res_sort
 
             ai_gate = int(st.session_state.config.get("ai_min_relevance", 40))
             filtered, pending = split_main_pending(results, min_score_filter, ai_gate)
@@ -1729,6 +1763,7 @@ def _library_fragment():
                 if lr.get("channel_id") == cid:
                     lr["notes"] = val
         _count_records.clear()
+        _count_all_statuses.clear()
         _get_paginated_records.clear()
         _get_dedup_records.clear()
 
@@ -1740,37 +1775,29 @@ def _library_fragment():
             r.get("discovered_by", "") for r in st.session_state.local_db if r.get("discovered_by")
         })
 
-    # 统计（按状态计数，不走全量拉取）
+    # 统计（一次请求统计全部状态，不走全量拉取）
     if db:
-        total_count = _count_records(
+        status_counts = _count_all_statuses(
             st.session_state.supabase_url, st.session_state.supabase_key,
-            "全部", tuple(), "全部", "",
         )
-        status_counts = {}
-        for s in ["新发现", "已发邮件"]:
-            status_counts[s] = _count_records(
-                st.session_state.supabase_url, st.session_state.supabase_key,
-                s, tuple(), "全部", "",
-            )
+        total_count = status_counts.get("total", 0)
     else:
         all_local = st.session_state.local_db
         total_count = len(all_local)
-        status_counts = {s: 0 for s in ["新发现", "已发邮件"]}
+        status_counts = {"total": total_count}
         for r in all_local:
-            s = r.get("status", "")
-            if s in status_counts:
-                status_counts[s] += 1
+            s = r.get("status", "") or "新发现"
+            status_counts[s] = status_counts.get(s, 0) + 1
 
     if total_count == 0:
         st.info("网红库为空。搜索后点击「加入网红库」，或使用「📥 批量导入」添加已有合作博主。")
     else:
-        cols = st.columns(3)
-        labels = ["总数", "新发现", "已发邮件"]
-        keys = ["total", "新发现", "已发邮件"]
-        values = [total_count] + [status_counts[k] for k in keys[1:]]
-        for col, label, val in zip(cols, labels, values):
+        cols = st.columns(4)
+        labels = ["总数", "新发现", "已发邮件", "已引入"]
+        keys = ["total", "新发现", "已发邮件", "已引入"]
+        for col, label, key in zip(cols, labels, keys):
             with col:
-                st.metric(label, val)
+                st.metric(label, status_counts.get(key, 0))
 
         st.markdown("")
 
@@ -1956,6 +1983,7 @@ def _library_fragment():
                     st.session_state[f"lst_{cid}"] = new_status
                     st.session_state[f"st_{cid}"] = new_status
                 _count_records.clear()
+                _count_all_statuses.clear()
                 _get_paginated_records.clear()
                 _get_dedup_records.clear()
                 _clear_batch_selection()
@@ -2055,6 +2083,7 @@ def _library_fragment():
                             st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") not in _batch_sel]
                             n = len(cids)
                         _count_records.clear()
+                        _count_all_statuses.clear()
                         _get_paginated_records.clear()
                         _get_dedup_records.clear()
                         _clear_batch_selection()
@@ -2198,6 +2227,7 @@ def _library_fragment():
                                 else:
                                     st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
                                 _count_records.clear()
+                                _count_all_statuses.clear()
                                 _get_paginated_records.clear()
                                 _get_dedup_records.clear()
                                 st.rerun()
@@ -2282,6 +2312,7 @@ def _library_fragment():
                         else:
                             st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
                         _count_records.clear()
+                        _count_all_statuses.clear()
                         _get_paginated_records.clear()
                         _get_dedup_records.clear()
                         st.rerun()
@@ -2510,136 +2541,150 @@ with tab_settings:
 
     config = st.session_state.config
 
-    # 基础参数
-    st.markdown("#### 📐 基础参数")
-    col_p1, col_p2, col_p3 = st.columns(3)
-    with col_p1:
-        new_min = st.number_input("最小订阅量", value=config["min_subs"], step=500)
-    with col_p2:
-        new_max = st.number_input("最大订阅量", value=config["max_subs"], step=5000)
-    with col_p3:
-        new_days = st.number_input("活跃天数（近N天有更新）", value=config["days_active"], step=7)
+    with st.form("settings_form", clear_on_submit=False):
+        # 基础参数
+        st.markdown("#### 📐 基础参数")
+        col_p1, col_p2, col_p3 = st.columns(3)
+        with col_p1:
+            new_min = st.number_input("最小订阅量", value=config["min_subs"], step=500)
+        with col_p2:
+            new_max = st.number_input("最大订阅量", value=config["max_subs"], step=5000)
+        with col_p3:
+            new_days = st.number_input("活跃天数（近N天有更新）", value=config["days_active"], step=7)
 
-    new_threshold = st.slider("评分阈值（低于此分不展示）", 0, 100, config["score_threshold"], step=5)
+        new_threshold = st.slider("评分阈值（低于此分不展示）", 0, 100, config["score_threshold"], step=5)
 
-    # 挖掘强度（第二期：决定一次能挖多少人）
-    st.markdown("")
-    st.markdown("#### ⚡ 挖掘强度（决定一次能挖多少人）")
-    _RPK_LABELS = ["50 条（省配额）", "100 条（推荐，数量×2）", "150 条（最大量）"]
-    _RPK_VALUES = {"50 条（省配额）": 50, "100 条（推荐，数量×2）": 100, "150 条（最大量）": 150}
-    _rpk_now = int(config.get("results_per_keyword", 100))
-    _rpk_idx = list(_RPK_VALUES.values()).index(_rpk_now) if _rpk_now in _RPK_VALUES.values() else 1
-    rpk_label = st.selectbox(
-        "每个关键词抓多少候选视频",
-        _RPK_LABELS, index=_rpk_idx,
-        help="YouTube 每页固定 50 条：选 100 条就是翻 2 页，数量翻倍，配额消耗也翻倍",
-    )
-    new_results_per_keyword = _RPK_VALUES[rpk_label]
+        # 挖掘强度（第二期：决定一次能挖多少人）
+        st.markdown("")
+        st.markdown("#### ⚡ 挖掘强度（决定一次能挖多少人）")
+        _RPK_LABELS = ["50 条（省配额）", "100 条（推荐，数量×2）", "150 条（最大量）"]
+        _RPK_VALUES = {"50 条（省配额）": 50, "100 条（推荐，数量×2）": 100, "150 条（最大量）": 150}
+        _rpk_now = int(config.get("results_per_keyword", 100))
+        _rpk_idx = list(_RPK_VALUES.values()).index(_rpk_now) if _rpk_now in _RPK_VALUES.values() else 1
+        rpk_label = st.selectbox(
+            "每个关键词抓多少候选视频",
+            _RPK_LABELS, index=_rpk_idx,
+            help="YouTube 每页固定 50 条：选 100 条就是翻 2 页，数量翻倍，配额消耗也翻倍",
+        )
+        new_results_per_keyword = _RPK_VALUES[rpk_label]
 
-    new_shorts_mode = st.toggle(
-        "Shorts 专项搜索", value=bool(config.get("shorts_mode", True)),
-        help="额外搜一遍短视频，专捞只做 Shorts 的小博主（每个关键词 +100 配额）",
-    )
-    new_dual_order = st.toggle(
-        "双排序搜索（时间＋相关性各搜一遍）", value=bool(config.get("dual_order", False)),
-        help="同一个词按两种排序各搜一遍，能挖到更多不同类型的频道（每个关键词 +100 配额）",
-    )
-    new_window = st.number_input(
-        "搜索时间窗（近N天发布的视频）", min_value=7, max_value=365,
-        value=int(config.get("window_days", 60)), step=30,
-        help="窗口越大挖到的人越多，不额外花配额。60天=只看最近两个月更新的",
-    )
-    _cost_hint = estimate_search_cost({
-        "results_per_keyword": new_results_per_keyword,
-        "shorts_mode": new_shorts_mode,
-        "dual_order": new_dual_order,
-    })
-    st.caption(f"💸 按当前设置，每个关键词搜索约 {_cost_hint} 配额（不含验证，每频道约2-3）· 每天免费 10,000")
-
-    # 评分权重（第二期：四维加权，种草关键词退役）
-    st.markdown("")
-    st.markdown("#### ⚖️ 评分权重（总分100）")
-    if ai_ready():
-        st.caption(f"🤖 AI分析已配置（{DASHSCOPE_MODEL}）：挖掘完成后自动判定垂类、打相关度、出标签")
-    else:
-        st.caption("🤖 AI分析未配置：挖掘照常可用，垂类相关度按中性50分计")
-    weights = {**DEFAULT_CONFIG["weights"], **config.get("weights", {})}
-    col_w1, col_w2 = st.columns(2)
-    with col_w1:
-        w_rel = st.slider("垂类相关度（AI判定）", 0, 60, weights.get("relevance", 50),
-                          help="AI 看博主内容跟我们货品的契合度。这一维占大头，最高可调到60")
-        w_data = st.slider("数据健康度", 0, 40, weights.get("data_health", 20),
-                           help="播/订比（按近10条中位数算，不怕爆款拉飞）")
-    with col_w2:
-        w_freq = st.slider("活跃度（更新频率）", 0, 40, weights.get("frequency", 15),
-                           help="近30天更新条数，≥4条拿满")
-        w_comm = st.slider("商业化历史", 0, 40, weights.get("commercial", 15),
-                           help="有没有接过广告/带过货。小博主普遍为0，权重别太高")
-
-    total_w = w_rel + w_data + w_freq + w_comm
-    if total_w != 100:
-        st.warning(f"⚠️ 当前权重总和 = {total_w}，建议调整为100")
-    else:
-        st.success(f"✅ 权重总和 = 100")
-
-    new_ai_gate = st.slider(
-        "AI相关度红线（低于此分进待定区）", 0, 80,
-        int(config.get("ai_min_relevance", 40)), step=5,
-        help="AI 判定相关度低于这条线的博主不进主列表，收进待定区人工翻（防挖偏的小保险）。拖到 0 = 关闭这条线",
-    )
-
-    # 去重规则
-    st.markdown("")
-    st.markdown("#### 🔁 去重规则（多少天后重新出现）")
-    rules = config["dedup_rules"]
-    col_d1, col_d2 = st.columns(2)
-    with col_d1:
-        d_email = st.number_input("已发邮件（天）", value=rules["emailed_days"], step=1)
-    with col_d2:
-        d_discover = st.number_input("新发现（天）", value=rules["discovered_days"], step=1)
-
-    # 保存按钮
-    st.markdown("")
-    if st.button("💾 保存我的设置", use_container_width=True):
-        st.session_state.config = {
-            "min_subs": new_min,
-            "max_subs": new_max,
-            "days_active": new_days,
-            "score_threshold": new_threshold,
-            # 挖掘强度（第二期新增）
+        new_shorts_mode = st.toggle(
+            "Shorts 专项搜索", value=bool(config.get("shorts_mode", True)),
+            help="额外搜一遍短视频，专捞只做 Shorts 的小博主（每个关键词 +100 配额）",
+        )
+        new_dual_order = st.toggle(
+            "双排序搜索（时间＋相关性各搜一遍）", value=bool(config.get("dual_order", False)),
+            help="同一个词按两种排序各搜一遍，能挖到更多不同类型的频道（每个关键词 +100 配额）",
+        )
+        new_window = st.number_input(
+            "搜索时间窗（近N天发布的视频）", min_value=7, max_value=365,
+            value=int(config.get("window_days", 60)), step=30,
+            help="窗口越大挖到的人越多，不额外花配额。60天=只看最近两个月更新的",
+        )
+        _cost_hint = estimate_search_cost({
             "results_per_keyword": new_results_per_keyword,
             "shorts_mode": new_shorts_mode,
             "dual_order": new_dual_order,
-            "window_days": new_window,
-            "weights": {
-                "relevance": w_rel, "data_health": w_data,
-                "frequency": w_freq, "commercial": w_comm,
-            },
-            "ai_min_relevance": new_ai_gate,
-            "dedup_rules": {
-                "onboarded_days": rules.get("onboarded_days", -1),
-                "rejected_days": rules.get("rejected_days", 90),
-                "emailed_days": d_email, "discovered_days": d_discover,
-                "eliminated_days": rules.get("eliminated_days", 90),
-            },
-            # BD邮件身份在左侧身份栏维护，这里原样保留，避免保存评分设置时丢失
-            "sender_name": st.session_state.config.get("sender_name", ""),
-            "kkt_id": st.session_state.config.get("kkt_id", ""),
-            # 网红库显示模式（卡片/列表）也原样保留
-            "view_mode": st.session_state.config.get("view_mode", "card"),
-        }
-        # 持久化到数据库（下次打开还是你的设置）
-        _db_save = get_db()
-        if _db_save and st.session_state.user_name:
-            ok = _db_save.save_user_settings(st.session_state.user_name, st.session_state.config)
-            if ok:
-                st.success(f"✅ 设置已保存到「{st.session_state.user_name}」的个人档案，下次打开自动加载")
-            else:
-                st.warning("⚠️ 本次生效，但未能存入数据库（刷新后会恢复默认）")
-        elif not st.session_state.user_name:
-            st.warning("⚠️ 请先在左侧选好你的名字，才能保存个人设置")
+        })
+        st.caption(f"💸 按当前设置，每个关键词搜索约 {_cost_hint} 配额（不含验证，每频道约2-3）· 每天免费 10,000")
+
+        # 评分权重（第二期：四维加权，种草关键词退役）
+        st.markdown("")
+        st.markdown("#### ⚖️ 评分权重（总分100）")
+        if ai_ready():
+            st.caption(f"🤖 AI分析已配置（{DASHSCOPE_MODEL}）：挖掘完成后自动判定垂类、打相关度、出标签")
         else:
-            st.success("✅ 设置已保存（本地模式，刷新后恢复默认）")
+            st.caption("🤖 AI分析未配置：挖掘照常可用，垂类相关度按中性50分计")
+        weights = {**DEFAULT_CONFIG["weights"], **config.get("weights", {})}
+        col_w1, col_w2 = st.columns(2)
+        with col_w1:
+            w_rel = st.slider("垂类相关度（AI判定）", 0, 60, weights.get("relevance", 50),
+                              help="AI 看博主内容跟我们货品的契合度。这一维占大头，最高可调到60")
+            w_data = st.slider("数据健康度", 0, 40, weights.get("data_health", 20),
+                               help="播/订比（按近10条中位数算，不怕爆款拉飞）")
+        with col_w2:
+            w_freq = st.slider("活跃度（更新频率）", 0, 40, weights.get("frequency", 15),
+                               help="近30天更新条数，≥4条拿满")
+            w_comm = st.slider("商业化历史", 0, 40, weights.get("commercial", 15),
+                               help="有没有接过广告/带过货。小博主普遍为0，权重别太高")
+
+        st.caption(f"四个权重相加建议 = 100（点「保存」时会校验，当前显示值为上次保存的设置）")
+
+        new_ai_gate = st.slider(
+            "AI相关度红线（低于此分进待定区）", 0, 80,
+            int(config.get("ai_min_relevance", 40)), step=5,
+            help="AI 判定相关度低于这条线的博主不进主列表，收进待定区人工翻（防挖偏的小保险）。拖到 0 = 关闭这条线",
+        )
+
+        # 去重规则
+        st.markdown("")
+        st.markdown("#### 🔁 去重规则（多少天后重新出现）")
+        st.caption("搜索时自动躲开这些状态的博主；-1 = 永久屏蔽")
+        rules = config["dedup_rules"]
+        col_d1, col_d2, col_d3 = st.columns(3)
+        with col_d1:
+            d_email = st.number_input("已发邮件（天）", value=rules["emailed_days"], step=1,
+                                      help="发过邮件的博主，过这么多天后搜索才会再推给你")
+        with col_d2:
+            d_discover = st.number_input("新发现（天）", value=rules["discovered_days"], step=1,
+                                         help="已入库但还没发邮件的博主，过这么多天后再推")
+        with col_d3:
+            d_reject = st.number_input("已拒绝（天）", value=rules["rejected_days"], step=1,
+                                       help="被拒绝的博主，过这么多天后给二次机会")
+        col_d4, col_d5, col_d6 = st.columns(3)
+        with col_d4:
+            d_elim = st.number_input("已淘汰（天）", value=rules["eliminated_days"], step=1,
+                                     help="点「淘汰」的博主，过这么多天后重新出现；-1 = 永久不再出现")
+        with col_d5:
+            d_onboard = st.number_input("已引入（天）", value=rules["onboarded_days"], step=1,
+                                        help="已合作引入的博主；默认 -1 永久屏蔽（避免重复挖自己人）")
+
+        # 保存按钮
+        st.markdown("")
+        if st.form_submit_button("💾 保存我的设置", use_container_width=True):
+            st.session_state.config = {
+                "min_subs": new_min,
+                "max_subs": new_max,
+                "days_active": new_days,
+                "score_threshold": new_threshold,
+                # 挖掘强度（第二期新增）
+                "results_per_keyword": new_results_per_keyword,
+                "shorts_mode": new_shorts_mode,
+                "dual_order": new_dual_order,
+                "window_days": new_window,
+                "weights": {
+                    "relevance": w_rel, "data_health": w_data,
+                    "frequency": w_freq, "commercial": w_comm,
+                },
+                "ai_min_relevance": new_ai_gate,
+                "dedup_rules": {
+                    "onboarded_days": d_onboard,
+                    "rejected_days": d_reject,
+                    "emailed_days": d_email, "discovered_days": d_discover,
+                    "eliminated_days": d_elim,
+                },
+                # BD邮件身份在左侧身份栏维护，这里原样保留，避免保存评分设置时丢失
+                "sender_name": st.session_state.config.get("sender_name", ""),
+                "kkt_id": st.session_state.config.get("kkt_id", ""),
+                # 网红库显示模式（卡片/列表）也原样保留
+                "view_mode": st.session_state.config.get("view_mode", "card"),
+            }
+            # 持久化到数据库（下次打开还是你的设置）
+            _db_save = get_db()
+            if _db_save and st.session_state.user_name:
+                ok = _db_save.save_user_settings(st.session_state.user_name, st.session_state.config)
+                if ok:
+                    st.success(f"✅ 设置已保存到「{st.session_state.user_name}」的个人档案，下次打开自动加载")
+                else:
+                    st.warning("⚠️ 本次生效，但未能存入数据库（刷新后会恢复默认）")
+            elif not st.session_state.user_name:
+                st.warning("⚠️ 请先在左侧选好你的名字，才能保存个人设置")
+            else:
+                st.success("✅ 设置已保存（本地模式，刷新后恢复默认）")
+            # 表单内权重提示滞后于拖动，提交时兜底校验一次
+            _tw = w_rel + w_data + w_freq + w_comm
+            if _tw != 100:
+                st.warning(f"⚠️ 权重总和 = {_tw}（建议调整为100），已按当前值保存")
 
     # 关键词库（可增删 · 全队共享）
     st.markdown("")
