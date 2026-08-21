@@ -17,15 +17,6 @@ import requests
 
 from streamlit_local_storage import LocalStorage
 
-# Streamlit 常驻进程不会重新 import 改过的本地模块（云端部署后 database 等
-# 还是旧代码，新 app.py 调旧方法直接 TypeError）。每次运行强制重载磁盘最新代码。
-import importlib as _importlib
-import database as _database_mod
-import youtube_api as _youtube_mod
-import ai_analyzer as _ai_mod
-for _m in (_database_mod, _youtube_mod, _ai_mod):
-    _importlib.reload(_m)
-
 from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
@@ -219,17 +210,6 @@ st.markdown("""
     .kol-notes { font-size: 11px; color: #a05c74; margin-top: 6px; font-weight: 600; word-break: break-word; }
     .kol-divider { border: none; border-top: 2px solid #1c1c1e; opacity: .15; margin: 8px 0; }
 
-    /* 已引入徽章（YTS 履约同步自动标记，只读） */
-    .kol-introduced {
-        display: inline-block; font-size: 12px; font-weight: 800; color: #14663a;
-        background: #e2f6e9; border: 1.5px solid #7fce9d; border-radius: 999px;
-        padding: 4px 12px; margin: 2px 0;
-    }
-    /* 列表模式：徽章+日期同一行、整体小一号，行高与普通行一致 */
-    .kol-intro-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 0; }
-    .kol-intro-line .kol-introduced { font-size: 10.5px; padding: 1px 8px; margin: 0; white-space: nowrap; }
-    .kol-intro-line .status-date { margin-top: 0; white-space: nowrap; }
-
     /* ---------- 卡片紧凑化：压缩内部垂直间距，让卡片变矮 ---------- */
     /* 容器内元素间距收紧 */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-card-marker) { gap: 8px; }
@@ -283,7 +263,7 @@ st.markdown("""
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) > .element-container { margin: 0 !important; }
     /* 各列内容上下居中：列本身居中对齐 + 列内内容也居中 */
     [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] { margin: 0 !important; gap: 10px; align-items: center !important; }
-    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] { justify-content: center !important; gap: 2px !important; }
+    [data-testid="stVerticalBlock"]:has(> .element-container .kol-row-marker) [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"] { justify-content: center !important; }
     /* 上下居中修复：Streamlit 把每个文字格子的高度锁成单行高（约24px），而"昵称+邮箱"是两行（约40px），
        多出的内容向下溢出、显得文字整体偏下。这里只把"文字格子"(.stMarkdown)上移 8px 补偿，
        让"昵称+邮箱"整体落在行的几何中心。
@@ -346,19 +326,6 @@ st.markdown("""
     }
     .stButton button[data-testid="stBaseButton-primary"]:active {
         transform: translate(2px,2px); box-shadow: none !important;
-    }
-    /* ---------- 弹窗里的 primary 按钮（如「确定移除」）：全局圆钮规则只服务行内图标钮，
-       弹窗里要恢复成黑色胶囊，否则文字被挤进圆里竖排 ---------- */
-    .stDialog button[data-testid="stBaseButton-primary"] {
-        width: 100% !important; height: 44px !important; min-height: 44px !important;
-        border-radius: 999px !important; padding: 0 26px !important;
-        background: #1c1c1e !important; color: #fff !important;
-    }
-    .stDialog button[data-testid="stBaseButton-primary"]:hover {
-        background: #33333a !important; color: #fff !important;
-    }
-    .stDialog button[data-testid="stBaseButton-primary"]:active {
-        transform: translate(3px,3px); box-shadow: none !important;
     }
 
     /* ---------- Tabs：4个均分胶囊 · 白底=未选中 · 黑底=选中 · 黑描边+硬阴影 ---------- */
@@ -806,7 +773,7 @@ def get_all_records() -> list[dict]:
 
 
 @st.cache_data(ttl=45, show_spinner=False)
-def _count_records(db_url, db_key, status, category_tuple, discoverer, discoverer_name, search=""):
+def _count_records(db_url, db_key, status, category_tuple, discoverer, discoverer_name):
     """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
@@ -815,13 +782,12 @@ def _count_records(db_url, db_key, status, category_tuple, discoverer, discovere
         category=list(category_tuple) if category_tuple else None,
         discoverer=discoverer,
         discoverer_name=discoverer_name,
-        search=search,
     )
 
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
-                           discoverer, discoverer_name, sort_by, descending, search=""):
+                           discoverer, discoverer_name, sort_by, descending):
     """带缓存的分页查询（内部临时创建 DB 连接）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
@@ -834,7 +800,6 @@ def _get_paginated_records(db_url, db_key, page, page_size, status, category_tup
         discoverer_name=discoverer_name,
         sort_by=sort_by,
         descending=descending,
-        search=search,
     )
 
 
@@ -991,58 +956,6 @@ def bd_email_dialog(rec):
     st.code(st.session_state[bk], language=None)
 
 
-@st.dialog("🗑 从库中移除", width="small")
-def _remove_confirm_dialog(rec):
-    """单条删除二次确认弹窗：手滑点 🗑 不会直接丢数据。"""
-    name = rec.get("channel_name", "未知") or "未知"
-    st.warning(f"确定要把「{name}」从网红库移除吗？")
-    st.caption("移除后这条记录（含备注）就没了；之后想找回可以重新导入。")
-    c_ok, c_no = st.columns(2)
-    with c_ok:
-        do_ok = st.button("确定移除", type="primary", use_container_width=True)
-    with c_no:
-        do_no = st.button("取消", use_container_width=True)
-    if do_no:
-        st.rerun()
-    if do_ok:
-        _db = get_db()
-        cid = rec.get("channel_id", "")
-        if _db:
-            _db.remove(cid)
-        else:
-            st.session_state.local_db = [
-                r for r in st.session_state.local_db if r.get("channel_id") != cid]
-        _count_records.clear()
-        _get_paginated_records.clear()
-        _get_dedup_records.clear()
-        st.session_state["_status_change_msg"] = f"🗑 已移除「{name}」"
-        st.rerun()
-
-
-# 导入失败原因的展示顺序（常见的排前面）
-_FAIL_REASON_ORDER = [
-    "频道已不存在（YouTube 查无此号）",
-    "格式无法识别（不是频道链接/handle）",
-    "视频链接失效，反查不到所属频道",
-]
-
-
-def _show_import_failures(failed_lines: list, reasons: dict):
-    """导入失败行按原因分组展示，使用者一眼看出哪些该改格式、哪些是频道没了。"""
-    if not failed_lines:
-        return
-    groups: dict = {}
-    for line in failed_lines:
-        groups.setdefault(reasons.get(line, "其他原因"), []).append(line)
-    ordered = [r for r in _FAIL_REASON_ORDER if r in groups]
-    ordered += [r for r in groups if r not in _FAIL_REASON_ORDER]
-    parts = []
-    for reason in ordered:
-        lines = groups[reason]
-        parts.append(f"**{reason}** · {len(lines)} 行\n" + "\n".join(f"· {l}" for l in lines))
-    st.warning("以下行导入失败：\n\n" + "\n\n".join(parts))
-
-
 # ---------- 缩略图服务端代理 ----------
 # 浏览器（尤其国内网络）常常直连不了 YouTube 图床 i.ytimg.com，
 # 改成服务器端下载、base64 内嵌到页面里；云上服务器在海外，必然可达。
@@ -1153,7 +1066,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
     """)
 
     # 操作按钮
-    col_a1, col_a2, col_a3 = st.columns([1, 1, 1.3])
+    col_a1, col_a2, col_a2b, col_a3 = st.columns([1, 1, 1, 1.3])
     with col_a1:
         if st.button("✅ 加入网红库", key=f"{key_prefix}add_{rank}", use_container_width=True):
             db = get_db()
@@ -1174,9 +1087,34 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 _get_dedup_records.clear()
                 st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」（本地模式）")
     with col_a2:
-        if st.button("跳过", key=f"{key_prefix}skip_{rank}", use_container_width=True):
+        if st.button("跳过", key=f"{key_prefix}skip_{rank}", use_container_width=True,
+                     help="只从本次结果里隐藏，不做记录：换关键词搜索还会再出现"):
             st.session_state.search_results.remove(ch)
             st.rerun()
+    with col_a2b:
+        if st.button("🗑 淘汰", key=f"{key_prefix}elim_{rank}", use_container_width=True,
+                     help="记入库中标为「已淘汰」：90 天内搜索自动躲开她（换关键词也不会再出现）"):
+            _db_e = get_db()
+            _ok_e = False
+            if _db_e:
+                if _db_e.add_influencer(ch, st.session_state.user_name):
+                    _ok_e = _db_e.update_status(ch["channel_id"], "已淘汰")
+            else:
+                # 本地模式
+                ch["status"] = "已淘汰"
+                ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                ch["discovered_by"] = st.session_state.user_name
+                st.session_state.local_db.append(ch)
+                _ok_e = True
+            if _ok_e:
+                _count_records.clear()
+                _get_paginated_records.clear()
+                _get_dedup_records.clear()
+                st.session_state.search_results.remove(ch)
+                st.toast(f"已淘汰「{ch['channel_name']}」：90 天内搜索不再出现")
+                st.rerun()
+            else:
+                st.error(f"淘汰失败：{_db_e.last_error if _db_e else '未知错误'}")
     with col_a3:
         if st.button("📧 生成BD邮件", key=f"{key_prefix}genmail_{rank}", use_container_width=True):
             bd_email_dialog(ch)
@@ -1754,47 +1692,7 @@ def _library_fragment():
     if _chg_msg:
         st.success(_chg_msg)
 
-    # YTS 履约同步的提示（同步有变化 / 未接通时写进 session，rerun 后显示）
-    _yts_msg = st.session_state.pop("_yts_sync_msg", None)
-    if _yts_msg:
-        st.info(_yts_msg)
-
     db = get_db()
-
-    # ---- YTS 履约自动同步：每次打开网红库悄悄对一遍（5 分钟冷却，防频繁调用）----
-    if db:
-        import time as _time
-        try:
-            import yts_sync as _yts
-        except Exception:
-            _yts = None
-            if not st.session_state.get("_yts_import_hinted"):
-                st.session_state["_yts_import_hinted"] = True
-                st.session_state["_yts_sync_msg"] = "🔗 YTS 同步模块加载失败（可能缺依赖），不影响正常使用"
-        if _yts is not None and _time.time() - st.session_state.get("_yts_sync_ts", 0) > 300:
-            st.session_state["_yts_sync_ts"] = _time.time()
-            _summary = None
-            try:
-                if _yts.yts_available():
-                    with st.spinner("正在同步 YTS 履约状态…"):
-                        _summary = _yts.run_sync(db)
-                elif not st.session_state.get("_yts_nokey_hinted"):
-                    st.session_state["_yts_nokey_hinted"] = True
-                    st.session_state["_yts_sync_msg"] = "🔗 YTS 同步未接通（未配置宜搭钥匙），两边暂不自动对齐"
-            except Exception:
-                if not st.session_state.get("_yts_err_hinted"):
-                    st.session_state["_yts_err_hinted"] = True
-                    st.session_state["_yts_sync_msg"] = "🔗 YTS 这次没同步成功（网络或宜搭波动），不影响正常使用"
-            if _summary and (_summary["marked"] or _summary["created"] or _summary["terminated"]):
-                _count_records.clear()
-                _get_paginated_records.clear()
-                _get_dedup_records.clear()
-                st.session_state["_yts_sync_msg"] = (
-                    f"🔗 YTS 履约已同步：{_summary['marked']} 人标记已引入 · "
-                    f"{_summary['created']} 人自动补建 · {_summary['terminated']} 人标注合作终止"
-                )
-                st.rerun()
-
     user_name = st.session_state.user_name or ""
 
     # 初始化筛选/分页状态
@@ -1831,21 +1729,6 @@ def _library_fragment():
         _get_paginated_records.clear()
         _get_dedup_records.clear()
 
-    def _save_category(cid: str, name: str):
-        """垂类框 on_change 回调：失焦/回车时保存（手动修正 AI 垂类判定）"""
-        val = st.session_state.get(f"cat_{cid}", "").strip()
-        _db = get_db()
-        if _db:
-            _db.update_category(cid, val)
-        else:
-            for lr in st.session_state.local_db:
-                if lr.get("channel_id") == cid:
-                    lr["category"] = val
-        _count_records.clear()
-        _get_paginated_records.clear()
-        _get_dedup_records.clear()
-        st.session_state["_status_change_msg"] = f"✅ 「{name}」垂类已改为「{val or '空'}」"
-
     # 挖掘人选项（用成员表，避免全量扫 influencers）
     if db:
         discoverer_options = ["全部", "只看我的"] + db.get_members()
@@ -1861,7 +1744,7 @@ def _library_fragment():
             "全部", tuple(), "全部", "",
         )
         status_counts = {}
-        for s in ["新发现", "已发邮件", "已引入"]:
+        for s in ["新发现", "已发邮件"]:
             status_counts[s] = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 s, tuple(), "全部", "",
@@ -1869,7 +1752,7 @@ def _library_fragment():
     else:
         all_local = st.session_state.local_db
         total_count = len(all_local)
-        status_counts = {s: 0 for s in ["新发现", "已发邮件", "已引入"]}
+        status_counts = {s: 0 for s in ["新发现", "已发邮件"]}
         for r in all_local:
             s = r.get("status", "")
             if s in status_counts:
@@ -1878,9 +1761,9 @@ def _library_fragment():
     if total_count == 0:
         st.info("网红库为空。搜索后点击「加入网红库」，或使用「📥 批量导入」添加已有合作博主。")
     else:
-        cols = st.columns(4)
-        labels = ["总数", "新发现", "已发邮件", "已引入"]
-        keys = ["total", "新发现", "已发邮件", "已引入"]
+        cols = st.columns(3)
+        labels = ["总数", "新发现", "已发邮件"]
+        keys = ["total", "新发现", "已发邮件"]
         values = [total_count] + [status_counts[k] for k in keys[1:]]
         for col, label, val in zip(cols, labels, values):
             with col:
@@ -1888,18 +1771,11 @@ def _library_fragment():
 
         st.markdown("")
 
-        # 搜索（找特定的人：名字/邮箱/链接模糊匹配）
-        st.text_input(
-            "🔍 搜索", key="db_search", label_visibility="collapsed",
-            placeholder="🔍 搜频道名 / 邮箱 / 链接，例：망고 或 btlish",
-            on_change=_reset_db_page,
-        )
-
         # 筛选
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             st.selectbox(
-                "状态", ["全部", "新发现", "已发邮件", "已引入"],
+                "状态", ["全部", "新发现", "已发邮件"],
                 key="filter_status", on_change=_reset_db_page,
             )
         with col_f2:
@@ -1928,13 +1804,12 @@ def _library_fragment():
         sort_by = st.session_state.db_sort
         page_size = st.session_state.db_page_size
         page = st.session_state.db_page
-        search_q = (st.session_state.get("db_search") or "").strip()
 
         # 获取分页记录
         if db:
             filtered_count = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
-                status, category, discoverer, user_name, search_q,
+                status, category, discoverer, user_name,
             )
             total_pages = max(1, (filtered_count + page_size - 1) // page_size)
             if page > total_pages:
@@ -1943,7 +1818,6 @@ def _library_fragment():
             records_page = _get_paginated_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 page, page_size, status, category, discoverer, user_name, sort_by, True,
-                search_q,
             )
         else:
             sort_map = {
@@ -1961,11 +1835,6 @@ def _library_fragment():
                 local = [r for r in local if r.get("discovered_by") == user_name]
             elif discoverer != "全部":
                 local = [r for r in local if r.get("discovered_by") == discoverer]
-            if search_q:
-                ql = search_q.lower()
-                local = [r for r in local if ql in (r.get("channel_name", "") or "").lower()
-                         or ql in (r.get("emails", "") or "").lower()
-                         or ql in (r.get("channel_url", "") or "").lower()]
             local.sort(key=sort_map[sort_by], reverse=True)
             filtered_count = len(local)
             total_pages = max(1, (filtered_count + page_size - 1) // page_size)
@@ -2273,32 +2142,15 @@ def _library_fragment():
                             <hr class="kol-divider">
                             """)
 
-                            # 状态下拉（手动只允许 新发现 / 已发邮件；已引入由 YTS 同步管理，只展示）
+                            # 状态下拉（只保留 新发现 / 已发邮件 两个状态）
                             # key 按频道ID存 + on_change 回调保存：批量改状态不会被残留旧值改回去
-                            # 垂类手动修正入口：AI 判得不准在这里改，保存后刷新/复查不会覆盖
-                            _c_st, _c_cat = st.columns([1, 1.5])
-                            with _c_st:
-                                if status == "已引入":
-                                    st.markdown(
-                                        '<div class="kol-introduced">✅ 已引入 · YTS履约</div>',
-                                        unsafe_allow_html=True,
-                                    )
-                                else:
-                                    _ST_OPTS = ["新发现", "已发邮件"]
-                                    st.selectbox(
-                                        "状态", _ST_OPTS,
-                                        index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
-                                        key=f"st_{_cid}", label_visibility="collapsed",
-                                        on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
-                                    )
-                            with _c_cat:
-                                st.text_input(
-                                    "垂类", value=cat, key=f"cat_{_cid}",
-                                    placeholder="AI判得不准？点这里改",
-                                    label_visibility="collapsed",
-                                    help="手动修正 AI 垂类判定，保存后不会被刷新/复查覆盖",
-                                    on_change=_save_category, args=(_cid, name),
-                                )
+                            _ST_OPTS = ["新发现", "已发邮件"]
+                            st.selectbox(
+                                "状态", _ST_OPTS,
+                                index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
+                                key=f"st_{_cid}", label_visibility="collapsed",
+                                on_change=_on_row_status_change, args=(_cid, rec, f"st_{_cid}"),
+                            )
 
                             # 刷新 / 删除 / 备注
                             c_rc, c_rm, c_nt = st.columns([1, 1, 4])
@@ -2331,9 +2183,18 @@ def _library_fragment():
                                 else:
                                     st.error(msg)
 
-                            # 删除处理（弹窗二次确认，防手滑误删）
+                            # 删除处理
                             if do_remove:
-                                _remove_confirm_dialog(rec)
+                                _db = get_db()
+                                cid = rec.get("channel_id", "")
+                                if _db:
+                                    _db.remove(cid)
+                                else:
+                                    st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                                _count_records.clear()
+                                _get_paginated_records.clear()
+                                _get_dedup_records.clear()
+                                st.rerun()
         else:
             # 列表模式：一行一个博主，字段对齐成表格，适合快速扫全库
             for idx, rec in enumerate(records_page):
@@ -2352,7 +2213,7 @@ def _library_fragment():
 
                     # 一行八列：勾选 · 频道/邮箱 · 垂类 · 订阅 · 评分 · 状态 · 挖掘人 · 操作
                     _cid = rec.get("channel_id", "")
-                    r0, r1, r2, r3, r4, r5, r6, r7 = st.columns([0.4, 2.4, 1, 0.9, 0.7, 1.4, 0.8, 1.8])
+                    r0, r1, r2, r3, r4, r5, r6, r7 = st.columns([0.4, 2.4, 1, 0.9, 0.7, 1.2, 0.9, 1.9])
                     with r0:
                         st.checkbox("选", key=f"bchk_{_cid}", on_change=_on_batch_check, args=(_cid,),
                                     label_visibility="collapsed", help="勾选后可批量操作")
@@ -2368,24 +2229,16 @@ def _library_fragment():
                     with r4:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
-                        if status == "已引入":
-                            # 徽章+日期同一行内联，列表行高与普通行一致
-                            _render_html(
-                                '<div class="kol-intro-line"><span class="kol-introduced">✅ 已引入</span>'
-                                + _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
-                                + '</div>'
-                            )
-                        else:
-                            _ST_OPTS_L = ["新发现", "已发邮件"]
-                            st.selectbox(
-                                "状态", _ST_OPTS_L,
-                                index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
-                                key=f"lst_{_cid}", label_visibility="collapsed",
-                                on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
-                            )
-                            _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
-                            if _status_date:
-                                _render_html(_status_date)
+                        _ST_OPTS_L = ["新发现", "已发邮件"]
+                        st.selectbox(
+                            "状态", _ST_OPTS_L,
+                            index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
+                            key=f"lst_{_cid}", label_visibility="collapsed",
+                            on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
+                        )
+                        _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+                        if _status_date:
+                            _render_html(_status_date)
                     with r6:
                         _render_html(f'<span class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</span>')
                     with r7:
@@ -2414,9 +2267,18 @@ def _library_fragment():
                         else:
                             st.error(msg)
 
-                    # 删除处理（弹窗二次确认，防手滑误删）
+                    # 删除处理
                     if do_remove:
-                        _remove_confirm_dialog(rec)
+                        _db = get_db()
+                        cid = rec.get("channel_id", "")
+                        if _db:
+                            _db.remove(cid)
+                        else:
+                            st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
+                        _count_records.clear()
+                        _get_paginated_records.clear()
+                        _get_dedup_records.clear()
+                        st.rerun()
 
         # 导出
         st.markdown("---")
@@ -2548,16 +2410,17 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                     parts.append(f"失败 {result['failed']}")
                     msg = "✅ 导入完成：" + "，".join(parts)
                     if result["failed"] > 0:
-                        msg += "（失败原因见下方分组）"
+                        msg += "（失败 = 链接格式无法识别，或频道已不存在）"
                     st.success(msg)
                     if result.get("failed_lines"):
-                        _show_import_failures(result["failed_lines"], result.get("failed_reasons", {}))
+                        st.warning(
+                            "以下行导入失败，请检查后重试：\n\n"
+                            + "\n\n".join(f"· {line}" for line in result["failed_lines"])
+                        )
                 else:
                     # 本地模式
-                    _fail_reasons = {}
                     resolved, bad_lines, raw_map = resolve_channel_ids(
-                        lines, st.session_state.api_key, st.session_state.quota,
-                        _fail_reasons)
+                        lines, st.session_state.api_key, st.session_state.quota)
                     chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
                     # 和 Supabase 模式一样走补全（播放/邮箱/评分/AI 垂类）
                     from database import enrich_import_channels
@@ -2587,7 +2450,10 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                         added += 1
                     st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
                     if bad_lines:
-                        _show_import_failures(bad_lines, _fail_reasons)
+                        st.warning(
+                            "以下行导入失败，请检查后重试：\n\n"
+                            + "\n\n".join(f"· {line}" for line in bad_lines)
+                        )
 
     st.markdown("---")
     with st.expander("🔄 一键补全旧数据（以前导入、缺播放/评分/邮箱的老记录）"):
