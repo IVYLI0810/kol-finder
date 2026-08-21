@@ -1092,8 +1092,16 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
         if st.button("✅ 加入网红库", key=f"{key_prefix}add_{rank}", use_container_width=True):
             db = get_db()
             if db:
-                if db.add_influencer(ch, st.session_state.user_name):
-                    st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」")
+                if db.exists(ch["channel_id"]):
+                    # 已在库中（如"新发现"过7天冷却期后重新被搜到）：
+                    # 不能重复插入（会撞唯一约束），改为刷新数据+重置为「新发现」
+                    _ok_add = db.update_status(ch["channel_id"], "新发现")
+                    _msg_add = f"「{ch['channel_name']}」已在库中，已重新标记为「新发现」"
+                else:
+                    _ok_add = db.add_influencer(ch, st.session_state.user_name)
+                    _msg_add = f"已加入网红库：「{ch['channel_name']}」标记为「新发现」"
+                if _ok_add:
+                    st.success(_msg_add)
                     _count_records.clear()
                     _count_all_statuses.clear()
                     _get_paginated_records.clear()
@@ -1101,13 +1109,18 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 else:
                     st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
             else:
-                # 本地模式
-                ch["status"] = "新发现"
-                ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                ch["discovered_by"] = st.session_state.user_name
-                st.session_state.local_db.append(ch)
+                # 本地模式：已在库则重置状态，不在库则新增
+                _hit = [lr for lr in st.session_state.local_db if lr.get("channel_id") == ch["channel_id"]]
+                if _hit:
+                    _apply_status_date(_hit[0], "新发现")
+                    st.success(f"「{ch['channel_name']}」已在库中，已重新标记为「新发现」（本地模式）")
+                else:
+                    ch["status"] = "新发现"
+                    ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    ch["discovered_by"] = st.session_state.user_name
+                    st.session_state.local_db.append(ch)
+                    st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」（本地模式）")
                 _get_dedup_records.clear()
-                st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」（本地模式）")
     with col_a1b:
         if st.button("📧 入库+标已发邮件", key=f"{key_prefix}addmail_{rank}", use_container_width=True,
                      help="一步完成：加入网红库并直接标记「已发邮件」（自动记录发邮件日期，自动流入 YTS）"):
@@ -1708,17 +1721,34 @@ with tab_search:
                 if st.button("✅ 全部加入网红库", use_container_width=True):
                     db = get_db()
                     added = 0
+                    re_marked = 0
                     for ch in filtered:
                         if db:
-                            if db.add_influencer(ch, st.session_state.user_name):
+                            if db.exists(ch["channel_id"]):
+                                # 已在库中：重置为「新发现」（不能重复插入）
+                                if db.update_status(ch["channel_id"], "新发现"):
+                                    re_marked += 1
+                            elif db.add_influencer(ch, st.session_state.user_name):
                                 added += 1
                         else:
-                            ch["status"] = "新发现"
-                            ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                            ch["discovered_by"] = st.session_state.user_name
-                            st.session_state.local_db.append(ch)
-                            added += 1
-                    st.success(f"已添加 {added} 个博主，均标记为「新发现」")
+                            _hit = [lr for lr in st.session_state.local_db if lr.get("channel_id") == ch["channel_id"]]
+                            if _hit:
+                                _apply_status_date(_hit[0], "新发现")
+                                re_marked += 1
+                            else:
+                                ch["status"] = "新发现"
+                                ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                ch["discovered_by"] = st.session_state.user_name
+                                st.session_state.local_db.append(ch)
+                                added += 1
+                    _count_records.clear()
+                    _count_all_statuses.clear()
+                    _get_paginated_records.clear()
+                    _get_dedup_records.clear()
+                    _msg = f"已添加 {added} 个博主，均标记为「新发现」"
+                    if re_marked:
+                        _msg += f"；另有 {re_marked} 个已在库中，已重新标记为「新发现」"
+                    st.success(_msg)
             with col_ba2:
                 if filtered:
                     export_data = []
