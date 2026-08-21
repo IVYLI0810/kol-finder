@@ -842,7 +842,13 @@ def _count_all_statuses(db_url, db_key):
     """带缓存的全状态计数：一次请求拿到 总数+各状态数量（原来要发3次请求）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
-    return db.count_by_status()
+    if hasattr(db, "count_by_status"):
+        return db.count_by_status()
+    # 兜底：database.py 还是旧版（没有 count_by_status）时，逐状态计数，不崩页面
+    out = {"total": db.count_records()}
+    for _s in ["新发现", "已发邮件", "已引入"]:
+        out[_s] = db.count_records(status=_s)
+    return out
 
 
 # ============================================================
@@ -1081,7 +1087,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
     """)
 
     # 操作按钮
-    col_a1, col_a2, col_a2b, col_a3 = st.columns([1, 1, 1, 1.3])
+    col_a1, col_a1b, col_a2, col_a2b, col_a3 = st.columns([1, 1.5, 0.8, 0.8, 1.25])
     with col_a1:
         if st.button("✅ 加入网红库", key=f"{key_prefix}add_{rank}", use_container_width=True):
             db = get_db()
@@ -1102,6 +1108,40 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 st.session_state.local_db.append(ch)
                 _get_dedup_records.clear()
                 st.success(f"已加入网红库：「{ch['channel_name']}」标记为「新发现」（本地模式）")
+    with col_a1b:
+        if st.button("📧 入库+标已发邮件", key=f"{key_prefix}addmail_{rank}", use_container_width=True,
+                     type="primary",
+                     help="一步完成：加入网红库并直接标记「已发邮件」（自动记录发邮件日期，自动流入 YTS）"):
+            _db_m = get_db()
+            _ok_m = False
+            if _db_m:
+                if _db_m.exists(ch["channel_id"]):
+                    # 已在库中：直接改状态（不能重复插入，会撞唯一约束）
+                    _ok_m = _db_m.update_status(ch["channel_id"], "已发邮件")
+                elif _db_m.add_influencer(ch, st.session_state.user_name):
+                    _ok_m = _db_m.update_status(ch["channel_id"], "已发邮件")
+            else:
+                # 本地模式：已在库则改状态，不在库则新增
+                _hit = [lr for lr in st.session_state.local_db if lr.get("channel_id") == ch["channel_id"]]
+                if _hit:
+                    _apply_status_date(_hit[0], "已发邮件")
+                else:
+                    ch["status"] = "已发邮件"
+                    ch["status_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    ch["email_sent_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                    ch["discovered_by"] = st.session_state.user_name
+                    st.session_state.local_db.append(ch)
+                _ok_m = True
+            if _ok_m:
+                _count_records.clear()
+                _count_all_statuses.clear()
+                _get_paginated_records.clear()
+                _get_dedup_records.clear()
+                st.toast(f"📧 「{ch['channel_name']}」已入库并标记「已发邮件」，将自动流入 YTS")
+                st.session_state.search_results.remove(ch)
+                st.rerun()
+            else:
+                st.error(f"操作失败：{_db_m.last_error if _db_m else '未知错误'}")
     with col_a2:
         if st.button("跳过", key=f"{key_prefix}skip_{rank}", use_container_width=True,
                      help="只从本次结果里隐藏，不做记录：换关键词搜索还会再出现"):
