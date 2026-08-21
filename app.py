@@ -184,6 +184,7 @@ st.markdown("""
     .status-emailed { background: #f5c542; color: #1c1c1e; }
     .status-onboard { background: #7fd8a4; color: #1c1c1e; }
     .status-reject { background: #ffd9e3; color: #1c1c1e; }
+    .status-elim { background: #d8d8dc; color: #1c1c1e; }
     .status-date {
         font-size: 10.5px; color: #a05c74; font-weight: 700;
         margin-top: 4px; line-height: 1.2;
@@ -505,13 +506,15 @@ def _render_html(html_str: str):
     st.markdown("\n".join(lines), unsafe_allow_html=True)
 
 
-def _status_date_html(status: str, email_sent_date, introduced_date) -> str:
-    """根据状态返回小字日期 HTML（用于已发邮件 / 已引入下方）。"""
+def _status_date_html(status: str, email_sent_date, introduced_date, status_date=None) -> str:
+    """根据状态返回小字日期 HTML（用于已发邮件 / 已引入 / 已淘汰下方）。"""
     date_str = ""
     if status == "已发邮件" and email_sent_date:
         date_str = f"📧 {str(email_sent_date)[:10]}"
     elif status == "已引入" and introduced_date:
         date_str = f"🤝 {str(introduced_date)[:10]}"
+    elif status == "已淘汰" and status_date:
+        date_str = f"🗑 淘汰于 {str(status_date)[:10]}"
     if date_str:
         return f'<div class="status-date">{date_str}</div>'
     return ""
@@ -1775,7 +1778,7 @@ def _library_fragment():
         col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             st.selectbox(
-                "状态", ["全部", "新发现", "已发邮件"],
+                "状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
                 key="filter_status", on_change=_reset_db_page,
             )
         with col_f2:
@@ -1914,7 +1917,7 @@ def _library_fragment():
             bc1, bc2, bc3, bc4, bc5 = st.columns([2, 1.4, 1.4, 1.4, 1.4])
             with bc1:
                 batch_new_status = st.selectbox(
-                    "目标状态", ["已发邮件", "新发现"],
+                    "目标状态", ["已发邮件", "新发现", "已引入", "已拒绝", "已淘汰"],
                     key="batch_status_select", label_visibility="collapsed",
                 )
             with bc2:
@@ -2112,7 +2115,10 @@ def _library_fragment():
 
                             status = rec.get("status", "新发现")
                             status_class = {"新发现": "status-new",
-                                           "已发邮件": "status-emailed"}.get(status, "status-new")
+                                           "已发邮件": "status-emailed",
+                                           "已引入": "status-onboard",
+                                           "已拒绝": "status-reject",
+                                           "已淘汰": "status-elim"}.get(status, "status-new")
 
                             name = rec.get("channel_name", "未知")
                             url = rec.get("channel_url", "#")
@@ -2123,7 +2129,7 @@ def _library_fragment():
                             email = rec.get("emails", "")
                             notes = rec.get("notes", "")
 
-                            status_date_html = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+                            status_date_html = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"), rec.get("status_date"))
 
                             # 卡片信息（紧凑版）
                             _render_html(f"""
@@ -2142,9 +2148,9 @@ def _library_fragment():
                             <hr class="kol-divider">
                             """)
 
-                            # 状态下拉（只保留 新发现 / 已发邮件 两个状态）
+                            # 状态下拉（全状态：新发现 / 已发邮件 / 已引入 / 已拒绝 / 已淘汰）
                             # key 按频道ID存 + on_change 回调保存：批量改状态不会被残留旧值改回去
-                            _ST_OPTS = ["新发现", "已发邮件"]
+                            _ST_OPTS = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
                             st.selectbox(
                                 "状态", _ST_OPTS,
                                 index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
@@ -2229,14 +2235,14 @@ def _library_fragment():
                     with r4:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
-                        _ST_OPTS_L = ["新发现", "已发邮件"]
+                        _ST_OPTS_L = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
                         st.selectbox(
                             "状态", _ST_OPTS_L,
                             index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
                             key=f"lst_{_cid}", label_visibility="collapsed",
                             on_change=_on_row_status_change, args=(_cid, rec, f"lst_{_cid}"),
                         )
-                        _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"))
+                        _status_date = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"), rec.get("status_date"))
                         if _status_date:
                             _render_html(_status_date)
                     with r6:
