@@ -140,15 +140,8 @@ class InfluencerDB:
         except Exception:
             return []
 
-    @staticmethod
-    def _search_or(search: str) -> str:
-        """搜索框 → Supabase or 过滤串：频道名/邮箱/链接 三列模糊匹配"""
-        q = search.strip().replace(",", " ")
-        return f"channel_name.ilike.%{q}%,emails.ilike.%{q}%,channel_url.ilike.%{q}%"
-
     def count_records(self, status: str = None, category: list[str] = None,
-                      discoverer: str = None, discoverer_name: str = "",
-                      search: str = "") -> int:
+                      discoverer: str = None, discoverer_name: str = "") -> int:
         """按当前筛选条件计数（用于分页）"""
         try:
             query = self.client.table(self.TABLE_NAME).select("*", count="exact")
@@ -161,18 +154,39 @@ class InfluencerDB:
                     query = query.eq("discovered_by", discoverer_name)
                 else:
                     query = query.eq("discovered_by", discoverer)
-            if search and search.strip():
-                query = query.or_(self._search_or(search))
             result = query.execute()
             return result.count or 0
         except Exception:
             return 0
 
+    def count_by_status(self) -> dict:
+        """一次请求统计全部状态分布（只拉 status 单列，比逐状态 count 快）。
+        返回 {"total": N, "新发现": n1, "已发邮件": n2, ...}"""
+        out = {"total": 0}
+        try:
+            rows, off = [], 0
+            while True:
+                r = (self.client.table(self.TABLE_NAME)
+                     .select("status")
+                     .range(off, off + 999)
+                     .execute())
+                batch = r.data or []
+                rows += batch
+                off += len(batch)
+                if len(batch) < 1000:
+                    break
+            for x in rows:
+                out["total"] += 1
+                s = x.get("status") or "新发现"
+                out[s] = out.get(s, 0) + 1
+        except Exception:
+            pass
+        return out
+
     def _build_paginated_query(self, fields: str, page: int, page_size: int,
                                status: str, category: list[str],
                                discoverer: str, discoverer_name: str,
-                               sort_by: str, descending: bool,
-                               search: str = ""):
+                               sort_by: str, descending: bool):
         """构建设分页查询（不执行）。"""
         query = self.client.table(self.TABLE_NAME).select(fields)
 
@@ -185,8 +199,6 @@ class InfluencerDB:
                 query = query.eq("discovered_by", discoverer_name)
             else:
                 query = query.eq("discovered_by", discoverer)
-        if search and search.strip():
-            query = query.or_(self._search_or(search))
 
         sort_col = self.SORT_COLUMNS.get(sort_by, "added_date")
         query = query.order(sort_col, desc=descending)
@@ -198,8 +210,7 @@ class InfluencerDB:
     def get_records_paginated(self, page: int = 1, page_size: int = 30,
                               status: str = None, category: list[str] = None,
                               discoverer: str = None, discoverer_name: str = "",
-                              sort_by: str = "添加时间", descending: bool = True,
-                              search: str = "") -> list[dict]:
+                              sort_by: str = "添加时间", descending: bool = True) -> list[dict]:
         """
         分页获取网红记录，筛选和排序都在 Supabase 服务端完成。
         只返回列表页需要的轻量字段，减少网络传输和内存占用。
@@ -207,7 +218,7 @@ class InfluencerDB:
         try:
             query = self._build_paginated_query(
                 self.LIGHT_FIELDS, page, page_size, status, category,
-                discoverer, discoverer_name, sort_by, descending, search,
+                discoverer, discoverer_name, sort_by, descending,
             )
             result = query.execute()
             return result.data or []
@@ -217,7 +228,7 @@ class InfluencerDB:
             try:
                 query = self._build_paginated_query(
                     self.LIGHT_FIELDS_FALLBACK, page, page_size, status, category,
-                    discoverer, discoverer_name, sort_by, descending, search,
+                    discoverer, discoverer_name, sort_by, descending,
                 )
                 result = query.execute()
                 return result.data or []
@@ -305,52 +316,6 @@ class InfluencerDB:
                 success += 1
         return success
 
-    def add_influencer_from_yts(self, yrec: dict) -> bool:
-        """
-        YTS 履约同步自动补建：库里没有的履约网红，建一条精简记录并直接标记「已引入」。
-        yrec: 宜搭记录（channel_id/channel_name/channel_url/category/recruiter/subscribers/email）
-        """
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        cid = yrec.get("channel_id", "")
-        if not cid:
-            return False
-        record = {
-            "channel_id": cid,
-            "channel_name": yrec.get("channel_name", ""),
-            "channel_url": yrec.get("channel_url", "") or f"https://www.youtube.com/channel/{cid}",
-            "about_url": "",
-            "category": yrec.get("category", ""),
-            "subscribers": yrec.get("subscribers", 0) or 0,
-            "avg_views_30d": 0,
-            "view_sub_ratio": 0,
-            "last_upload": "",
-            "score_total": 0,
-            "score_detail": json.dumps({
-                "scores": {}, "ai_category": "", "ai_relevance": "",
-                "ai_tags": [], "ai_analyzed": False,
-            }, ensure_ascii=False),
-            "emails": yrec.get("email", "") or "",
-            "has_commercial": False,
-            "commercial_evidence": "",
-            "recent_titles": "",
-            "thumbnails": "[]",
-            "status": "已引入",
-            "status_date": now,
-            "discovered_by": yrec.get("recruiter", "") or "YTS同步",
-            "email_sent_date": None,
-            "introduced_date": now,
-            "notes": f"[YTS同步自动创建] 该网红在YTS履约中，自动补建并标记已引入",
-            "added_date": now,
-            "last_checked": now,
-        }
-        try:
-            self.client.table(self.TABLE_NAME).insert(record).execute()
-            self.last_error = None
-            return True
-        except Exception as e:
-            self.last_error = str(e)
-            return False
-
     # ============================================================
     # 更新
     # ============================================================
@@ -379,14 +344,6 @@ class InfluencerDB:
         """更新备注"""
         try:
             self.client.table(self.TABLE_NAME).update({"notes": notes}).eq("channel_id", channel_id).execute()
-            return True
-        except Exception:
-            return False
-
-    def update_category(self, channel_id: str, category: str) -> bool:
-        """更新垂类（手动修正 AI 判定用；刷新/复查不会覆盖此字段）"""
-        try:
-            self.client.table(self.TABLE_NAME).update({"category": category}).eq("channel_id", channel_id).execute()
             return True
         except Exception:
             return False
@@ -434,13 +391,10 @@ class InfluencerDB:
         result = {"success": 0, "updated": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
         # 先把混合格式（UC ID / @handle / 各种链接 / 视频链接）统一解析成频道ID
-        # 实在无法识别的行计入 failed 并记录原文和原因，不再静默吞掉
-        fail_reasons = {}
-        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(
-            channel_ids, api_key, quota, fail_reasons)
+        # 实在无法识别的行计入 failed 并记录原文，不再静默吞掉
+        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(channel_ids, api_key, quota)
         result["failed"] += len(unresolvable)
         result["failed_lines"] = list(unresolvable)
-        result["failed_reasons"] = fail_reasons
 
         # 区分已存在 / 新博主
         existing_ids = [cid for cid in resolved_ids if self.exists(cid)]
