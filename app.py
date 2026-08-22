@@ -24,7 +24,7 @@ from youtube_api import (
     split_main_pending, split_line_date, split_line_meta, parse_import_excel,
 )
 from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, CATEGORY_EN_MAP, DASHSCOPE_MODEL,
-                         generate_keywords, generate_bd_email_ai)
+                         CONTENT_CATEGORY_TABLE, generate_keywords, generate_bd_email_ai)
 
 
 def _cat_export_label(cat) -> str:
@@ -787,13 +787,15 @@ def get_all_records() -> list[dict]:
 
 
 @st.cache_data(ttl=45, show_spinner=False)
-def _count_records(db_url, db_key, status, category_tuple, discoverer, discoverer_name):
+def _count_records(db_url, db_key, status, category_tuple, content_category_tuple,
+                   discoverer, discoverer_name):
     """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
     return db.count_records(
         status=status,
         category=list(category_tuple) if category_tuple else None,
+        content_category=list(content_category_tuple) if content_category_tuple else None,
         discoverer=discoverer,
         discoverer_name=discoverer_name,
     )
@@ -801,6 +803,7 @@ def _count_records(db_url, db_key, status, category_tuple, discoverer, discovere
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
+                           content_category_tuple,
                            discoverer, discoverer_name, sort_by, descending):
     """带缓存的分页查询（内部临时创建 DB 连接）"""
     from database import InfluencerDB
@@ -810,6 +813,7 @@ def _get_paginated_records(db_url, db_key, page, page_size, status, category_tup
         page_size=page_size,
         status=status,
         category=list(category_tuple) if category_tuple else None,
+        content_category=list(content_category_tuple) if content_category_tuple else None,
         discoverer=discoverer,
         discoverer_name=discoverer_name,
         sort_by=sort_by,
@@ -1042,8 +1046,9 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
         evidence = ", ".join(commercial.get("evidence", [])[:3])
         comm_html = f'<span class="commercial-badge">💰 有商业合作 ({_safe(evidence)})</span>'
 
-    # AI 垂类 + 相关度 + 关键词标签（第二期）
-    ai_cat = ch.get("category", "") or "未判定"
+    # AI 双垂类 + 相关度 + 关键词标签（内容垂类=拍什么 / 带货垂类=挂什么链接）
+    content_cat = ch.get("ai_content_category", "") or ch.get("content_category", "")
+    commerce_cat = ch.get("category", "") or "未判定"
     rel_html = ""
     if ch.get("ai_analyzed"):
         rel_html = f'<span class="rel-badge">🎯 AI相关度 {ch.get("ai_relevance", "-")}</span>'
@@ -1062,7 +1067,8 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                 <div>
                     <div class="card-name">{_safe(ch['channel_name'])}</div>
                     <div class="tag-row" style="margin-top:8px; margin-bottom:0;">
-                        <span class="cat-tag">🤖 {_safe(ai_cat)}</span>
+                        <span class="cat-tag" title="内容垂类：频道在拍什么">🎬 {_safe(content_cat) if content_cat else '内容垂类待判定'}</span>
+                        <span class="cat-tag" title="带货垂类：适合挂哪类商品链接">🛍 {_safe(commerce_cat)}</span>
                         {rel_html}
                         {tag_html}
                         {comm_html}
@@ -1762,7 +1768,8 @@ with tab_search:
                     for ch in filtered:
                         export_data.append({
                             "频道名": ch["channel_name"], "主页链接": ch["channel_url"],
-                            "垂类(AI判定)": _cat_export_label(ch.get("category", "")),
+                            "内容垂类(拍什么)": ch.get("ai_content_category", "") or ch.get("content_category", ""),
+                            "可带货垂类(AI判定)": _cat_export_label(ch.get("category", "")),
                             "AI相关度": ch.get("ai_relevance", "") if ch.get("ai_analyzed") else "",
                             "AI标签": " / ".join(ch.get("ai_tags", [])),
                             "订阅量": ch["subscribers"],
@@ -1812,6 +1819,7 @@ def _library_fragment():
     _db_defaults = {
         "filter_status": "全部",
         "filter_cat": [],
+        "filter_ccat": [],
         "filter_discoverer": "全部",
         "db_sort": "添加时间",
         "db_page": 1,
@@ -1878,7 +1886,7 @@ def _library_fragment():
         st.markdown("")
 
         # 筛选
-        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+        col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
         with col_f1:
             st.selectbox(
                 "状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
@@ -1886,18 +1894,25 @@ def _library_fragment():
             )
         with col_f2:
             st.multiselect(
-                "垂类", options=AI_CATEGORY_TABLE + list(KW_LIB.keys()),
-                default=[], placeholder="全部垂类",
-                help="新挖掘的博主垂类由 AI 判定（韩文品类名），老博主是原来的中文垂类",
-                key="filter_cat", on_change=_reset_db_page,
+                "内容垂类(拍什么)", options=CONTENT_CATEGORY_TABLE,
+                default=[], placeholder="全部内容垂类",
+                help="频道在拍什么内容（AI判定的17类）。老博主没跑过新版AI的暂时为空",
+                key="filter_ccat", on_change=_reset_db_page,
             )
         with col_f3:
+            st.multiselect(
+                "带货垂类(卖什么)", options=AI_CATEGORY_TABLE + list(KW_LIB.keys()),
+                default=[], placeholder="全部带货垂类",
+                help="适合挂哪类商品链接（速卖通官方类目）。新博主由AI判定，老博主是原来的中文垂类",
+                key="filter_cat", on_change=_reset_db_page,
+            )
+        with col_f4:
             st.selectbox(
                 "👤 挖掘人", discoverer_options,
                 help="「只看我的」= 只显示你挖的博主；也可以选同事名字看 TA 挖了谁",
                 key="filter_discoverer", on_change=_reset_db_page,
             )
-        with col_f4:
+        with col_f5:
             st.selectbox(
                 "排序", ["添加时间", "评分", "订阅量", "最近更新"],
                 key="db_sort", on_change=_reset_db_page,
@@ -1906,6 +1921,7 @@ def _library_fragment():
         # 当前筛选条件
         status = st.session_state.filter_status
         category = tuple(st.session_state.filter_cat) if st.session_state.filter_cat else tuple()
+        content_category = tuple(st.session_state.filter_ccat) if st.session_state.filter_ccat else tuple()
         discoverer = st.session_state.filter_discoverer
         sort_by = st.session_state.db_sort
         page_size = st.session_state.db_page_size
@@ -1915,7 +1931,7 @@ def _library_fragment():
         if db:
             filtered_count = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
-                status, category, discoverer, user_name,
+                status, category, content_category, discoverer, user_name,
             )
             total_pages = max(1, (filtered_count + page_size - 1) // page_size)
             if page > total_pages:
@@ -1923,7 +1939,8 @@ def _library_fragment():
             page = max(1, min(page, total_pages))
             records_page = _get_paginated_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
-                page, page_size, status, category, discoverer, user_name, sort_by, True,
+                page, page_size, status, category, content_category,
+                discoverer, user_name, sort_by, True,
             )
         else:
             sort_map = {
@@ -1937,6 +1954,8 @@ def _library_fragment():
                 local = [r for r in local if r.get("status") == status]
             if st.session_state.filter_cat:
                 local = [r for r in local if r.get("category") in st.session_state.filter_cat]
+            if st.session_state.filter_ccat:
+                local = [r for r in local if r.get("content_category") in st.session_state.filter_ccat]
             if discoverer == "只看我的":
                 local = [r for r in local if r.get("discovered_by") == user_name]
             elif discoverer != "全部":
@@ -2179,7 +2198,8 @@ def _library_fragment():
                     if r.get("channel_id") in _batch_sel:
                         sel_rows.append({
                             "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
-                            "垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
+                            "内容垂类": r.get("content_category", ""),
+                            "可带货垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
                             "评分": r.get("score_total", ""), "状态": r.get("status", ""),
                             "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
                             "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
@@ -2230,6 +2250,7 @@ def _library_fragment():
                             subs = rec.get("subscribers", 0)
                             score = rec.get("score_total", "-")
                             cat = rec.get("category", "")
+                            ccat = rec.get("content_category", "")
                             discoverer = rec.get("discovered_by", "")
                             email = rec.get("emails", "")
                             notes = rec.get("notes", "")
@@ -2244,7 +2265,8 @@ def _library_fragment():
                             </div>
                             <div class="kol-tags">
                                 <span class="status-tag {status_class}">{status}</span>
-                                <span class="cat-tag">📂 {_safe(cat)}</span>
+                                <span class="cat-tag" title="内容垂类：频道在拍什么">🎬 {_safe(ccat) if ccat else '—'}</span>
+                                <span class="cat-tag" title="带货垂类：适合挂哪类商品链接">🛍 {_safe(cat)}</span>
                             </div>
                             {status_date_html}
                             <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
@@ -2320,6 +2342,7 @@ def _library_fragment():
                     subs = rec.get("subscribers", 0)
                     score = rec.get("score_total", "-")
                     cat = rec.get("category", "")
+                    ccat = rec.get("content_category", "")
                     discoverer = rec.get("discovered_by", "")
                     email = rec.get("emails", "")
 
@@ -2335,7 +2358,10 @@ def _library_fragment():
                             f'<span class="row-email">📧 {_safe(email) if email else "未公开"}</span>'
                         )
                     with r2:
-                        _render_html(f'<span class="cat-tag row-cat">📂 {_safe(cat)}</span>')
+                        _render_html(
+                            f'<span class="cat-tag row-cat" title="内容垂类：频道在拍什么">🎬 {_safe(ccat) if ccat else "—"}</span><br>'
+                            f'<span class="cat-tag row-cat" title="带货垂类：适合挂哪类商品链接">🛍 {_safe(cat)}</span>'
+                        )
                     with r3:
                         _render_html(f'<span class="row-num">📺 {subs:,}</span>')
                     with r4:
@@ -2401,7 +2427,8 @@ def _library_fragment():
             for r in all_records:
                 export_rows.append({
                     "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
-                    "垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
+                    "内容垂类": r.get("content_category", ""),
+                    "可带货垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
                     "评分": r.get("score_total", ""), "状态": r.get("status", ""),
                     "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
                     "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),

@@ -302,6 +302,8 @@ def get_channels(channel_ids: list[str], api_key: str, quota: QuotaTracker) -> d
                 "description": snippet.get("description", ""),
                 "country": snippet.get("country", ""),
                 "created_at": snippet.get("publishedAt", ""),
+                # 频道级官方分类（创作者建号时自选；新版API可能不返回，拿不到就空）
+                "yt_category": snippet.get("category", ""),
                 "subscribers": int(stats.get("subscriberCount", 0)),
                 "total_videos": int(stats.get("videoCount", 0)),
                 "total_views": int(stats.get("viewCount", 0)),
@@ -717,6 +719,8 @@ def get_video_stats(video_ids: list[str], api_key: str, quota: QuotaTracker) -> 
                 "title": snippet.get("title", ""),
                 "tags": snippet.get("tags", []),
                 "description": snippet.get("description", ""),
+                # 视频级官方分类编号（创作者上传时自选，给 AI 判垂类当佐证）
+                "category_id": str(snippet.get("categoryId", "")),
             }
     return results
 
@@ -779,6 +783,20 @@ def detect_commercial_history(descriptions: list[str], tags_list: list[list[str]
 
 
 # ============================================================
+# YouTube 官方分类编号表（固定的几十个，全球统一）
+# 创作者上传视频/建频道时自己选的，只能当佐证、不能当标准答案
+# ============================================================
+
+YT_CATEGORY_NAMES = {
+    "1": "Film & Animation", "2": "Autos & Vehicles", "10": "Music",
+    "15": "Pets & Animals", "17": "Sports", "19": "Travel & Events",
+    "20": "Gaming", "22": "People & Blogs", "23": "Comedy",
+    "24": "Entertainment", "25": "News & Politics", "26": "Howto & Style",
+    "27": "Education", "28": "Science & Technology", "29": "Nonprofits & Activism",
+}
+
+
+# ============================================================
 # 频道完整验证流程
 # ============================================================
 
@@ -830,6 +848,7 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
     recent_descriptions = []
     recent_thumbnails = []
     recent_tags = []
+    recent_cat_ids = []     # 近期视频的官方分类编号（佐证AI判垂类）
 
     for v in uploads:
         pub_date = datetime.fromisoformat(v["published_at"].replace("Z", "+00:00"))
@@ -841,6 +860,9 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
             recent_titles.append(v["title"])
             recent_descriptions.append(video_stats[vid].get("description", ""))
             recent_tags.append(video_stats[vid].get("tags", []))
+            cid_ = video_stats[vid].get("category_id", "")
+            if cid_:
+                recent_cat_ids.append(cid_)
         recent_thumbnails.append({
             "title": v["title"],
             "url": v["thumbnail_url"],
@@ -861,6 +883,17 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
     # 商业化历史检测
     commercial = detect_commercial_history(recent_descriptions, recent_tags)
 
+    # 近期视频官方分类汇总（如 "Howto & Style×3 · People & Blogs×2"），给 AI 当佐证
+    yt_video_categories = ""
+    if recent_cat_ids:
+        counts: dict = {}
+        for cid_ in recent_cat_ids:
+            counts[cid_] = counts.get(cid_, 0) + 1
+        top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:3]
+        yt_video_categories = " · ".join(
+            f"{YT_CATEGORY_NAMES.get(cid_, cid_)}×{n}" for cid_, n in top
+        )
+
     # 组装结果
     channel_info.update({
         "last_upload": latest_upload[:10],
@@ -875,6 +908,7 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
         # 简介和标签用于垂类"三合一"判断（截断省内存，关键词一般在前300字）
         "recent_descriptions": [d[:300] for d in recent_descriptions[:5]],
         "recent_tags": recent_tags[:5],
+        "yt_video_categories": yt_video_categories,
         "emails": emails,
         "commercial_history": commercial,
     })

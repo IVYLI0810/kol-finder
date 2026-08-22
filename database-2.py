@@ -38,10 +38,12 @@ def enrich_import_channels(channels: dict, api_key: str, quota, config: dict = N
     except Exception:
         pass
 
-    # 3) 自动评分（AI 垂类写进 category，和挖掘流程保持一致）
+    # 3) 自动评分（AI 垂类写进 category=带货垂类，content_category=内容垂类，和挖掘流程保持一致）
     for info in enriched:
         if info.get("ai_category"):
             info["category"] = info["ai_category"]
+        if info.get("ai_content_category"):
+            info["content_category"] = info["ai_content_category"]
         try:
             info["scores"] = score_channel(info, config)
         except Exception:
@@ -111,12 +113,12 @@ class InfluencerDB:
 
     # 列表页只需要这些轻量字段，不要 thumbnails / recent_titles 等大字段
     LIGHT_FIELDS = (
-        "channel_id,channel_name,channel_url,category,subscribers,"
+        "channel_id,channel_name,channel_url,category,content_category,subscribers,"
         "score_total,status,discovered_by,emails,notes,added_date,"
         "status_date,last_upload,last_checked,email_sent_date,introduced_date"
     )
-    # 兼容尚未添加 introduced_date 列的库（首次升级时）
-    LIGHT_FIELDS_FALLBACK = LIGHT_FIELDS.replace(",introduced_date", "")
+    # 兼容尚未添加新列的库（首次升级时）：introduced_date / content_category 可能还没建
+    LIGHT_FIELDS_FALLBACK = LIGHT_FIELDS.replace(",introduced_date", "").replace(",content_category", "")
 
     SORT_COLUMNS = {
         "添加时间": "added_date",
@@ -141,6 +143,7 @@ class InfluencerDB:
             return []
 
     def count_records(self, status: str = None, category: list[str] = None,
+                      content_category: list[str] = None,
                       discoverer: str = None, discoverer_name: str = "") -> int:
         """按当前筛选条件计数（用于分页）"""
         try:
@@ -149,6 +152,8 @@ class InfluencerDB:
                 query = query.eq("status", status)
             if category:
                 query = query.in_("category", category)
+            if content_category:
+                query = query.in_("content_category", content_category)
             if discoverer and discoverer != "全部":
                 if discoverer == "只看我的":
                     query = query.eq("discovered_by", discoverer_name)
@@ -185,6 +190,7 @@ class InfluencerDB:
 
     def _build_paginated_query(self, fields: str, page: int, page_size: int,
                                status: str, category: list[str],
+                               content_category: list[str],
                                discoverer: str, discoverer_name: str,
                                sort_by: str, descending: bool):
         """构建设分页查询（不执行）。"""
@@ -194,6 +200,8 @@ class InfluencerDB:
             query = query.eq("status", status)
         if category:
             query = query.in_("category", category)
+        if content_category:
+            query = query.in_("content_category", content_category)
         if discoverer and discoverer != "全部":
             if discoverer == "只看我的":
                 query = query.eq("discovered_by", discoverer_name)
@@ -209,6 +217,7 @@ class InfluencerDB:
 
     def get_records_paginated(self, page: int = 1, page_size: int = 30,
                               status: str = None, category: list[str] = None,
+                              content_category: list[str] = None,
                               discoverer: str = None, discoverer_name: str = "",
                               sort_by: str = "添加时间", descending: bool = True) -> list[dict]:
         """
@@ -218,17 +227,17 @@ class InfluencerDB:
         try:
             query = self._build_paginated_query(
                 self.LIGHT_FIELDS, page, page_size, status, category,
-                discoverer, discoverer_name, sort_by, descending,
+                content_category, discoverer, discoverer_name, sort_by, descending,
             )
             result = query.execute()
             return result.data or []
         except Exception:
-            # 首次升级时 introduced_date 列可能还不存在，先回退到基础字段，
-            # 保证旧数据能正常显示；等新列加好后会自动显示完整日期。
+            # 首次升级时新列（introduced_date/content_category）可能还不存在，
+            # 先回退到基础字段，保证旧数据能正常显示；等新列加好后会自动显示完整信息。
             try:
                 query = self._build_paginated_query(
                     self.LIGHT_FIELDS_FALLBACK, page, page_size, status, category,
-                    discoverer, discoverer_name, sort_by, descending,
+                    None, discoverer, discoverer_name, sort_by, descending,
                 )
                 result = query.execute()
                 return result.data or []
@@ -273,15 +282,18 @@ class InfluencerDB:
             "channel_url": channel_data.get("channel_url", ""),
             "about_url": channel_data.get("about_url", ""),
             "category": channel_data.get("category", ""),
+            "content_category": channel_data.get("content_category", "")
+            or channel_data.get("ai_content_category", ""),
             "subscribers": channel_data.get("subscribers", 0),
             "avg_views_30d": channel_data.get("avg_views_30d", 0),
             "view_sub_ratio": channel_data.get("view_sub_ratio", 0),
             "last_upload": channel_data.get("last_upload", ""),
             "score_total": channel_data.get("scores", {}).get("total", 0),
-            # 第二期：评分明细 + AI 分析结果（垂类/相关度/标签）一起存档，信息不丢
+            # 第二期：评分明细 + AI 分析结果（双垂类/相关度/标签）一起存档，信息不丢
             "score_detail": json.dumps({
                 "scores": channel_data.get("scores", {}),
                 "ai_category": channel_data.get("ai_category", ""),
+                "ai_content_category": channel_data.get("ai_content_category", ""),
                 "ai_relevance": channel_data.get("ai_relevance", ""),
                 "ai_tags": channel_data.get("ai_tags", []),
                 "ai_analyzed": channel_data.get("ai_analyzed", False),
@@ -305,6 +317,15 @@ class InfluencerDB:
             self.last_error = None
             return True
         except Exception as e:
+            # content_category 新列还没建时降级重试一次（去掉该列），不阻塞入库
+            if "content_category" in record:
+                try:
+                    record2 = {k: v for k, v in record.items() if k != "content_category"}
+                    self.client.table(self.TABLE_NAME).insert(record2).execute()
+                    self.last_error = None
+                    return True
+                except Exception:
+                    pass
             self.last_error = str(e)
             return False
 
@@ -362,11 +383,25 @@ class InfluencerDB:
             update_data["view_sub_ratio"] = new_data.get("view_sub_ratio", 0)
             update_data["last_upload"] = new_data.get("last_upload", "")
             update_data["score_total"] = new_data.get("scores", {}).get("total", 0)
+            # 刷新时重跑了 AI → 把最新的双垂类标签也存下来
+            if new_data.get("ai_analyzed"):
+                if new_data.get("ai_category"):
+                    update_data["category"] = new_data["ai_category"]
+                if new_data.get("ai_content_category"):
+                    update_data["content_category"] = new_data["ai_content_category"]
 
         try:
             self.client.table(self.TABLE_NAME).update(update_data).eq("channel_id", channel_id).execute()
             return True
         except Exception:
+            # content_category 新列还没建时降级重试一次（去掉该列），保证基础数据照常更新
+            if "content_category" in update_data:
+                try:
+                    update_data2 = {k: v for k, v in update_data.items() if k != "content_category"}
+                    self.client.table(self.TABLE_NAME).update(update_data2).eq("channel_id", channel_id).execute()
+                    return True
+                except Exception:
+                    pass
             return False
 
     # ============================================================
@@ -435,6 +470,8 @@ class InfluencerDB:
                 "channel_url": info.get("channel_url", ""),
                 "about_url": info.get("about_url", ""),
                 "category": info.get("category", ""),
+                "content_category": info.get("content_category", "")
+                or info.get("ai_content_category", ""),
                 "subscribers": info.get("subscribers", 0),
                 "avg_views_30d": info.get("avg_views_30d", 0),
                 "view_sub_ratio": info.get("view_sub_ratio", 0),
@@ -443,6 +480,7 @@ class InfluencerDB:
                 "score_detail": json.dumps({
                     "scores": info.get("scores", {}),
                     "ai_category": info.get("ai_category", ""),
+                    "ai_content_category": info.get("ai_content_category", ""),
                     "ai_relevance": info.get("ai_relevance", ""),
                     "ai_tags": info.get("ai_tags", []),
                     "ai_analyzed": info.get("ai_analyzed", False),
@@ -465,6 +503,15 @@ class InfluencerDB:
                 self.client.table(self.TABLE_NAME).insert(record).execute()
                 result["success"] += 1
             except Exception:
+                # content_category 新列还没建时降级重试一次（去掉该列）
+                if "content_category" in record:
+                    try:
+                        record2 = {k: v for k, v in record.items() if k != "content_category"}
+                        self.client.table(self.TABLE_NAME).insert(record2).execute()
+                        result["success"] += 1
+                        continue
+                    except Exception:
+                        pass
                 result["failed"] += 1
 
         return result
@@ -540,6 +587,8 @@ class InfluencerDB:
                     try:
                         if f.get("ai_category"):
                             f["category"] = f["ai_category"]
+                        if f.get("ai_content_category"):
+                            f["content_category"] = f["ai_content_category"]
                         try:
                             f["scores"] = score_channel(f)
                         except Exception:
@@ -548,6 +597,7 @@ class InfluencerDB:
                         ch = f.get("commercial_history") or {}
                         upd = {
                             "category": str(f.get("category") or ""),
+                            "content_category": str(f.get("content_category") or ""),
                             "subscribers": f.get("subscribers") or 0,
                             "avg_views_30d": f.get("avg_views_30d") or 0,
                             "view_sub_ratio": f.get("view_sub_ratio") or 0,
@@ -556,6 +606,7 @@ class InfluencerDB:
                             "score_detail": json.dumps({
                                 "scores": f.get("scores") or {},
                                 "ai_category": f.get("ai_category") or "",
+                                "ai_content_category": f.get("ai_content_category") or "",
                                 "ai_relevance": f.get("ai_relevance", ""),
                                 "ai_tags": f.get("ai_tags") or [],
                                 "ai_analyzed": bool(f.get("ai_analyzed", False)),
@@ -567,7 +618,12 @@ class InfluencerDB:
                             "thumbnails": str(f.get("recent_thumbnails") or []),
                             "last_checked": now,
                         }
-                        self.client.table(self.TABLE_NAME).update(upd).eq("channel_id", r["channel_id"]).execute()
+                        try:
+                            self.client.table(self.TABLE_NAME).update(upd).eq("channel_id", r["channel_id"]).execute()
+                        except Exception:
+                            # content_category 新列还没建时降级重试一次（去掉该列）
+                            upd2 = {k: v for k, v in upd.items() if k != "content_category"}
+                            self.client.table(self.TABLE_NAME).update(upd2).eq("channel_id", r["channel_id"]).execute()
                         res["done"] += 1
                     except Exception:
                         res["failed"] += 1
