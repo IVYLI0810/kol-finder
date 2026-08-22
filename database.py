@@ -76,6 +76,9 @@ class InfluencerDB:
         """
         self.client: Client = create_client(url, key)
         self.last_error = None  # 记录最近一次错误信息
+        # 最近一次读取是否失败（区分「数据库抖动」和「真的空库」，
+        # 失败时页面保留上次数据并提示，而不是显示 0 人）
+        self.last_query_failed = False
 
     # ============================================================
     # 查询
@@ -89,8 +92,10 @@ class InfluencerDB:
                 # 软删除的记录不再出现在 UI 读取里，也防止被同步流程复活
                 query = query.neq("status", "已删除")
             result = query.execute()
+            self.last_query_failed = False
             return result.data or []
         except Exception:
+            self.last_query_failed = True
             return []
 
     def get_record(self, channel_id: str) -> dict | None:
@@ -167,8 +172,10 @@ class InfluencerDB:
                 .neq("status", "已删除")
                 .execute()
             )
+            self.last_query_failed = False
             return result.data or []
         except Exception:
+            self.last_query_failed = True
             return []
 
     def count_records(self, status: str = None, category: list[str] = None,
@@ -194,13 +201,15 @@ class InfluencerDB:
             if name_query:
                 query = query.or_(_name_filter(name_query))
             result = query.execute()
+            self.last_query_failed = False
             return result.count or 0
         except Exception:
+            self.last_query_failed = True
             return 0
 
     def count_by_status(self) -> dict:
         """一次请求统计全部状态分布（只拉 status 单列，比逐状态 count 快）。
-        返回 {"total": N, "新发现": n1, "已发邮件": n2, ...}"""
+        软删除的不计入。返回 {"total": N, "新发现": n1, "已发邮件": n2, ...}"""
         out = {"total": 0}
         try:
             rows, off = [], 0
@@ -215,11 +224,14 @@ class InfluencerDB:
                 if len(batch) < 1000:
                     break
             for x in rows:
-                out["total"] += 1
                 s = x.get("status") or "新发现"
+                if s == "已删除":
+                    continue  # 软删除的不算进总数/业绩
+                out["total"] += 1
                 out[s] = out.get(s, 0) + 1
+            self.last_query_failed = False
         except Exception:
-            pass
+            self.last_query_failed = True
         return out
 
     def _build_paginated_query(self, fields: str, page: int, page_size: int,
@@ -271,6 +283,7 @@ class InfluencerDB:
                 name_query=name_query,
             )
             result = query.execute()
+            self.last_query_failed = False
             return result.data or []
         except Exception:
             # 首次升级时新列（introduced_date/content_category）可能还不存在，
@@ -282,8 +295,10 @@ class InfluencerDB:
                     name_query=name_query,
                 )
                 result = query.execute()
+                self.last_query_failed = False
                 return result.data or []
             except Exception:
+                self.last_query_failed = True
                 return []
 
     def get_channel_ids(self) -> set[str]:
@@ -398,16 +413,38 @@ class InfluencerDB:
             update_data["introduced_date"] = now
 
         try:
-            self.client.table(self.TABLE_NAME).update(update_data).eq("channel_id", channel_id).execute()
-            return True
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update(update_data).eq("channel_id", channel_id).execute()
+            )
+            # 命中 0 行 = 记录已不存在（可能被别人删了），不能报成功
+            return len(result.data or []) >= 1
+        except Exception:
+            return False
+
+    def revert_from_introduced(self, channel_id: str) -> bool:
+        """合作黄了（YTS 取消/流回/淘汰）：把「已引入」回收成「已发邮件」。
+        清空引入日期，不动原来的发邮件日期；命中 0 行返回 False。"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        try:
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update({"status": "已发邮件", "status_date": now,
+                         "introduced_date": None})
+                .eq("channel_id", channel_id).execute()
+            )
+            return len(result.data or []) >= 1
         except Exception:
             return False
 
     def update_notes(self, channel_id: str, notes: str) -> bool:
         """更新备注"""
         try:
-            self.client.table(self.TABLE_NAME).update({"notes": notes}).eq("channel_id", channel_id).execute()
-            return True
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update({"notes": notes}).eq("channel_id", channel_id).execute()
+            )
+            return len(result.data or []) >= 1
         except Exception:
             return False
 
@@ -433,15 +470,21 @@ class InfluencerDB:
                     update_data["content_category"] = new_data["ai_content_category"]
 
         try:
-            self.client.table(self.TABLE_NAME).update(update_data).eq("channel_id", channel_id).execute()
-            return True
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update(update_data).eq("channel_id", channel_id).execute()
+            )
+            return len(result.data or []) >= 1
         except Exception:
             # content_category 新列还没建时降级重试一次（去掉该列），保证基础数据照常更新
             if "content_category" in update_data:
                 try:
                     update_data2 = {k: v for k, v in update_data.items() if k != "content_category"}
-                    self.client.table(self.TABLE_NAME).update(update_data2).eq("channel_id", channel_id).execute()
-                    return True
+                    result = (
+                        self.client.table(self.TABLE_NAME)
+                        .update(update_data2).eq("channel_id", channel_id).execute()
+                    )
+                    return len(result.data or []) >= 1
                 except Exception:
                     pass
             return False

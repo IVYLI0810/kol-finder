@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import json
 import re
+import time
 import html as html_lib
 import base64
 from concurrent.futures import ThreadPoolExecutor
@@ -569,28 +570,30 @@ def _append_reason(old_notes: str, new_status: str, reason: str) -> str:
     return f"{old_notes}\n{entry}" if old_notes else entry
 
 
-def _apply_status_change(rec: dict, new_status: str, reason: str = ""):
-    """应用单条状态变更（自动判断 DB/本地模式）；填了原因就追加到备注。"""
+def _apply_status_change(rec: dict, new_status: str, reason: str = "") -> bool:
+    """应用单条状态变更（自动判断 DB/本地模式）；填了原因就追加到备注。
+    返回是否真的写入成功（记录已被删除时命中 0 行 → False）"""
     cid = rec.get("channel_id", "")
     _db = get_db()
+    ok = True
     if _db:
-        _db.update_status(cid, new_status)
-        if reason.strip():
+        ok = _db.update_status(cid, new_status)
+        if ok and reason.strip():
             # 底稿现读库里最新备注（缓存行可能已过期），避免覆盖别人的并发编辑
             latest = _db.get_record(cid)
             old_notes = (latest.get("notes") or "") if latest else (rec.get("notes", "") or "")
             _db.update_notes(cid, _append_reason(old_notes, new_status, reason))
     else:
+        ok = False
         for lr in st.session_state.local_db:
             if lr.get("channel_id") == cid:
                 _apply_status_date(lr, new_status)
                 if reason.strip():
                     lr["notes"] = _append_reason(lr.get("notes", "") or "", new_status, reason)
+                ok = True
                 break
-    _count_records.clear()
-    _count_all_statuses.clear()
-    _get_paginated_records.clear()
-    _get_dedup_records.clear()
+    _invalidate_lib_caches()
+    return ok
 
 
 def _enrich_with_ai(results: list, status_box=None) -> str:
@@ -658,18 +661,12 @@ def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owne
                         lr["score_total"] = result["scores"].get("total", lr.get("score_total", 0))
                         lr["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                         break
-            _count_records.clear()
-            _count_all_statuses.clear()
-            _get_paginated_records.clear()
-            _get_dedup_records.clear()
+            _invalidate_lib_caches()
             return True, f"✅ {channel_name}：数据已刷新"
         else:
             if _db:
                 _db.update_last_checked(channel_id, False)
-            _count_records.clear()
-            _count_all_statuses.clear()
-            _get_paginated_records.clear()
-            _get_dedup_records.clear()
+            _invalidate_lib_caches()
             return True, f"⚠️ {channel_name}：已标记为不活跃"
 
 
@@ -699,12 +696,14 @@ def _on_row_status_change(cid: str, rec: dict, widget_key: str):
     val = st.session_state.get(widget_key)
     if not val or val == rec.get("status", "新发现"):
         return
-    _apply_status_change(rec, val)
-    _count_records.clear()
-    _count_all_statuses.clear()
-    _get_paginated_records.clear()
-    _get_dedup_records.clear()
-    st.session_state["_status_change_msg"] = f"✅ 「{rec.get('channel_name', '')}」已改为 {val}"
+    ok = _apply_status_change(rec, val)
+    _invalidate_lib_caches()
+    _name = rec.get('channel_name', '')
+    if ok:
+        st.session_state["_status_change_msg"] = f"✅ 「{_name}」已改为 {val}"
+    else:
+        st.session_state["_status_change_msg"] = (
+            f"⚠️ 「{_name}」没改成：TA 可能已被队友删除，刷新后看不到就是已删除")
 
 
 def _clear_batch_selection():
@@ -814,10 +813,11 @@ def get_all_records() -> list[dict]:
 @st.cache_data(ttl=45, show_spinner=False)
 def _count_records(db_url, db_key, status, category_tuple, content_category_tuple,
                    discoverer, discoverer_name, name_q):
-    """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）"""
+    """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）。
+    返回 (数量, 本次查询是否失败)"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
-    return db.count_records(
+    n = db.count_records(
         status=status,
         category=list(category_tuple) if category_tuple else None,
         content_category=list(content_category_tuple) if content_category_tuple else None,
@@ -825,16 +825,20 @@ def _count_records(db_url, db_key, status, category_tuple, content_category_tupl
         discoverer_name=discoverer_name,
         name_query=name_q,
     )
+    failed = getattr(db, "last_query_failed", False)
+    if failed:
+        _count_records.clear()  # 失败不缓存，下一次交互立刻重试
+    return n, failed
 
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
                            content_category_tuple,
                            discoverer, discoverer_name, sort_by, descending, name_q):
-    """带缓存的分页查询（内部临时创建 DB 连接）"""
+    """带缓存的分页查询（内部临时创建 DB 连接）。返回 (记录, 是否失败)"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
-    return db.get_records_paginated(
+    rows = db.get_records_paginated(
         page=page,
         page_size=page_size,
         status=status,
@@ -846,6 +850,10 @@ def _get_paginated_records(db_url, db_key, page, page_size, status, category_tup
         descending=descending,
         name_query=name_q,
     )
+    failed = getattr(db, "last_query_failed", False)
+    if failed:
+        _get_paginated_records.clear()
+    return rows, failed
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -877,16 +885,31 @@ def _get_dedup_records(db_url, db_key):
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _count_all_statuses(db_url, db_key):
-    """带缓存的全状态计数：一次请求拿到 总数+各状态数量（原来要发3次请求）"""
+    """带缓存的全状态计数：一次请求拿到 总数+各状态数量（原来要发3次请求）。
+    返回 (统计dict, 是否失败)"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
     if hasattr(db, "count_by_status"):
-        return db.count_by_status()
-    # 兜底：database.py 还是旧版（没有 count_by_status）时，逐状态计数，不崩页面
-    out = {"total": db.count_records()}
-    for _s in ["新发现", "已发邮件", "已引入"]:
-        out[_s] = db.count_records(status=_s)
-    return out
+        out = db.count_by_status()
+    else:
+        # 兜底：database.py 还是旧版（没有 count_by_status）时，逐状态计数，不崩页面
+        out = {"total": db.count_records()}
+        for _s in ["新发现", "已发邮件", "已引入"]:
+            out[_s] = db.count_records(status=_s)
+    failed = getattr(db, "last_query_failed", False)
+    if failed:
+        _count_all_statuses.clear()
+    return out, failed
+
+
+def _invalidate_lib_caches():
+    """网红库数据有变动时统一调用：清掉列表/计数缓存，并丢弃已生成的导出内容
+    （避免导出面板里留着改动前的旧数据）"""
+    _count_records.clear()
+    _count_all_statuses.clear()
+    _get_paginated_records.clear()
+    _get_dedup_records.clear()
+    st.session_state.pop("_export_rows", None)
 
 
 # ============================================================
@@ -1036,9 +1059,7 @@ def _remove_confirm_dialog(rec):
         else:
             st.session_state.local_db = [
                 r for r in st.session_state.local_db if r.get("channel_id") != cid]
-        _count_records.clear()
-        _get_paginated_records.clear()
-        _get_dedup_records.clear()
+        _invalidate_lib_caches()
         st.session_state["_status_change_msg"] = f"🗑 已移除「{name}」"
         st.rerun()
 
@@ -1194,10 +1215,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                     _msg_add = f"已加入网红库：「{ch['channel_name']}」标记为「新发现」"
                 if _ok_add:
                     st.success(_msg_add)
-                    _count_records.clear()
-                    _count_all_statuses.clear()
-                    _get_paginated_records.clear()
-                    _get_dedup_records.clear()
+                    _invalidate_lib_caches()
                 else:
                     st.error(f"添加失败：{db.last_error or '未知错误，请检查数据库连接'}")
             else:
@@ -1237,10 +1255,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                     st.session_state.local_db.append(ch)
                 _ok_m = True
             if _ok_m:
-                _count_records.clear()
-                _count_all_statuses.clear()
-                _get_paginated_records.clear()
-                _get_dedup_records.clear()
+                _invalidate_lib_caches()
                 st.toast(f"📧 「{ch['channel_name']}」已入库并标记「已发邮件」，将自动流入 YTS")
                 st.session_state.search_results.remove(ch)
                 st.rerun()
@@ -1274,10 +1289,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                     st.session_state.local_db.append(ch)
                 _ok_e = True
             if _ok_e:
-                _count_records.clear()
-                _count_all_statuses.clear()
-                _get_paginated_records.clear()
-                _get_dedup_records.clear()
+                _invalidate_lib_caches()
                 st.session_state.search_results.remove(ch)
                 st.toast(f"已淘汰「{ch['channel_name']}」：90 天内搜索不再出现")
                 st.rerun()
@@ -1833,10 +1845,7 @@ with tab_search:
                                 ch["discovered_by"] = st.session_state.user_name
                                 st.session_state.local_db.append(ch)
                                 added += 1
-                    _count_records.clear()
-                    _count_all_statuses.clear()
-                    _get_paginated_records.clear()
-                    _get_dedup_records.clear()
+                    _invalidate_lib_caches()
                     _msg = f"已添加 {added} 个博主，均标记为「新发现」"
                     if re_marked:
                         _msg += f"；另有 {re_marked} 个已在库中，已重新标记为「新发现」"
@@ -1889,7 +1898,10 @@ def _library_fragment():
     # 状态变更的成功提示统一在这里显示（操作时先写入 session，rerun 后弹出，避免提示消失）
     _chg_msg = st.session_state.pop("_status_change_msg", None)
     if _chg_msg:
-        st.success(_chg_msg)
+        if _chg_msg.startswith("✅"):
+            st.success(_chg_msg)
+        else:
+            st.warning(_chg_msg)
 
     db = get_db()
 
@@ -1917,16 +1929,23 @@ def _library_fragment():
                 if not st.session_state.get("_yts_err_hinted"):
                     st.session_state["_yts_err_hinted"] = True
                     st.session_state["_yts_sync_msg"] = "🔗 YTS 这次没同步成功（网络或宜搭波动），不影响正常使用"
-            if _summary and (_summary["marked"] or _summary["created"]
-                             or _summary["terminated"] or _summary.get("skipped")):
-                _count_records.clear()
-                _get_paginated_records.clear()
-                _get_dedup_records.clear()
+            if _summary and _summary.get("failed"):
+                if not st.session_state.get("_yts_dbfail_hinted"):
+                    st.session_state["_yts_dbfail_hinted"] = True
+                    st.session_state["_yts_sync_msg"] = "🔗 YTS 同步这轮跳过了（数据库连接不稳），下轮自动补上"
+            elif _summary and (_summary["marked"] or _summary["created"]
+                               or _summary["terminated"] or _summary.get("skipped")
+                               or _summary.get("ignored")):
+                st.session_state["_yts_dbfail_hinted"] = False
+                _invalidate_lib_caches()
                 _skipped = _summary.get("skipped", 0)
+                _ignored = _summary.get("ignored", 0)
                 st.session_state["_yts_sync_msg"] = (
                     f"🔗 YTS 履约已同步：{_summary['marked']} 人标记已引入 · "
-                    f"{_summary['created']} 人自动补建 · {_summary['terminated']} 人标注合作终止"
+                    f"{_summary['created']} 人自动补建 · "
+                    f"{_summary['terminated']} 人合作终止（状态回收为已发邮件）"
                     + (f" · {_skipped} 人因库中已有同频道跳过" if _skipped else "")
+                    + (f" · {_ignored} 人有拒绝/淘汰结论，保持不动" if _ignored else "")
                 )
                 st.rerun()
 
@@ -1954,28 +1973,51 @@ def _library_fragment():
     def _reset_db_page():
         st.session_state.db_page = 1
 
-    def _save_note(cid: str):
-        """备注框 on_change 回调：只在失焦/回车时保存"""
+    def _flush_note(cid: str) -> bool:
+        """把某个网红的备注真正写库（带并发判定）。返回是否写入成功。"""
         val = st.session_state.get(f"nt_{cid}", "")
         _db = get_db()
+        ok = True
         if _db:
             # 写入前现读最新备注做并发判定：和渲染时的底稿、本次要存的值都不同，
             # 说明编辑期间被别人改过——仍按本人版本保存，但提示一下
-            latest = _db.get_record(cid) if _db else None
+            latest = _db.get_record(cid)
             base = st.session_state.get(f"ntbase_{cid}")
             conflict = latest is not None and (latest.get("notes") or "") not in (base, val)
-            _db.update_notes(cid, val)
-            if conflict:
+            ok = _db.update_notes(cid, val)
+            if not ok:
+                st.session_state["_status_change_msg"] = "⚠️ 备注没存上：这个网红可能已被队友删除"
+            elif conflict:
                 st.session_state["_status_change_msg"] = "⚠️ 备注在你编辑期间被其他人修改过，已按你的版本保存"
         else:
             for lr in st.session_state.local_db:
                 if lr.get("channel_id") == cid:
                     lr["notes"] = val
         st.session_state[f"ntbase_{cid}"] = val
-        _count_records.clear()
-        _count_all_statuses.clear()
-        _get_paginated_records.clear()
-        _get_dedup_records.clear()
+        st.session_state.pop(f"_note_dirty_{cid}", None)
+        _invalidate_lib_caches()
+        return ok
+
+    def _note_keystroke(cid: str):
+        """备注框 on_change：只记一下「刚敲过字」，不写库。
+        （旧版每敲一个字就写一次库+打穿全队缓存，打20个字=20趟数据库）"""
+        st.session_state[f"_note_dirty_{cid}"] = time.time()
+
+    _flushed_any = False
+    for _k in [k for k in st.session_state.keys() if k.startswith("_note_dirty_")]:
+        _cid_dirty = _k[len("_note_dirty_"):]
+        # 停手超过 1 秒才真正保存；还在打字就继续攒着
+        if time.time() - st.session_state.get(_k, 0) >= 1.0:
+            _flush_note(_cid_dirty)
+            _flushed_any = True
+    if _flushed_any:
+        # 不 rerun：本轮后面的查询会自然拿到最新备注；提示当场弹出
+        _note_msg = st.session_state.pop("_status_change_msg", None)
+        if _note_msg:
+            if _note_msg.startswith("✅"):
+                st.success(_note_msg)
+            else:
+                st.warning(_note_msg)
 
     # 挖掘人选项（用成员表，避免全量扫 influencers）
     if db:
@@ -1986,11 +2028,18 @@ def _library_fragment():
         })
 
     # 统计（一次请求统计全部状态，不走全量拉取）
+    _counts_failed = False
     if db:
-        status_counts = _count_all_statuses(
+        status_counts, _counts_failed = _count_all_statuses(
             st.session_state.supabase_url, st.session_state.supabase_key,
         )
         total_count = status_counts.get("total", 0)
+        if _counts_failed and st.session_state.get("_lib_last_counts"):
+            # 数据库抖动：不能把「查失败」当「库是空的」，退回上次成功的统计
+            status_counts = st.session_state["_lib_last_counts"]
+            total_count = status_counts.get("total", 0)
+        elif not _counts_failed:
+            st.session_state["_lib_last_counts"] = status_counts
     else:
         all_local = st.session_state.local_db
         total_count = len(all_local)
@@ -1999,9 +2048,13 @@ def _library_fragment():
             s = r.get("status", "") or "新发现"
             status_counts[s] = status_counts.get(s, 0) + 1
 
-    if total_count == 0:
+    if total_count == 0 and not _counts_failed:
         st.info("网红库为空。搜索后点击「加入网红库」，或使用「📥 批量导入」添加已有合作博主。")
+    elif total_count == 0:
+        st.error("⚠️ 这次没连上数据库。库不一定是空的，请稍后再打开看看。")
     else:
+        if _counts_failed:
+            st.warning("⚠️ 数据库连接不稳，正在显示最近一次成功加载的数据，稍后再试")
         cols = st.columns(4)
         labels = ["总数", "新发现", "已发邮件", "已引入"]
         keys = ["total", "新发现", "已发邮件", "已引入"]
@@ -2056,14 +2109,26 @@ def _library_fragment():
         category = tuple(st.session_state.filter_cat) if st.session_state.filter_cat else tuple()
         content_category = tuple(st.session_state.filter_ccat) if st.session_state.filter_ccat else tuple()
         discoverer = st.session_state.filter_discoverer
-        name_q = (st.session_state.filter_q or "").strip()
+        # 搜索防抖：敲字过程中沿用上一次搜索词（命中页面缓存，零数据库请求），
+        # 停手约 0.6 秒才真正查一次。旧版每敲一个字打两次数据库。
+        _q_now = (st.session_state.filter_q or "").strip()
+        if _q_now != st.session_state.get("_q_prev_render", _q_now):
+            st.session_state["_q_keystroke_at"] = time.time()  # 这次 rerun 是敲字触发
+        st.session_state["_q_prev_render"] = _q_now
+        if _q_now != st.session_state.get("_q_applied", _q_now) \
+                and time.time() - st.session_state.get("_q_keystroke_at", 0) < 0.6:
+            time.sleep(0.35)  # fragment 内小睡等后续输入；片段重跑，不影响别的页面
+            st.rerun()
+        st.session_state["_q_applied"] = _q_now
+        name_q = _q_now
         sort_by = st.session_state.db_sort
         page_size = st.session_state.db_page_size
         page = st.session_state.db_page
 
         # 获取分页记录
+        _page_failed = False
         if db:
-            filtered_count = _count_records(
+            filtered_count, _cnt_fail = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 status, category, content_category, discoverer, user_name,
                 name_q,
@@ -2072,11 +2137,20 @@ def _library_fragment():
             if page > total_pages:
                 st.session_state.db_page = total_pages
             page = max(1, min(page, total_pages))
-            records_page = _get_paginated_records(
+            records_page, _pg_fail = _get_paginated_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 page, page_size, status, category, content_category,
                 discoverer, user_name, sort_by, True, name_q,
             )
+            _page_failed = _cnt_fail or _pg_fail
+            if not _page_failed:
+                st.session_state["_lib_last_page"] = {
+                    "records": records_page, "count": filtered_count}
+            elif st.session_state.get("_lib_last_page"):
+                # 数据库抖动：退回上次成功加载的一页，不给大家看空白/假空库
+                _lp = st.session_state["_lib_last_page"]
+                records_page, filtered_count = _lp["records"], _lp["count"]
+                total_pages = max(1, (filtered_count + page_size - 1) // page_size)
         else:
             sort_map = {
                 "添加时间": lambda x: x.get("added_date", ""),
@@ -2107,6 +2181,10 @@ def _library_fragment():
             page = max(1, min(page, total_pages))
             start = (page - 1) * page_size
             records_page = local[start:start + page_size]
+
+        # 数据库抖动提示（统计正常、列表查询失败时补一条）
+        if _page_failed and not _counts_failed:
+            st.warning("⚠️ 数据库连接不稳，列表显示的是最近一次成功加载的数据，稍后再试")
 
         # 显示模式切换
         _vm_saved = st.session_state.view_mode
@@ -2216,13 +2294,13 @@ def _library_fragment():
                 for cid in cids:
                     st.session_state[f"lst_{cid}"] = new_status
                     st.session_state[f"st_{cid}"] = new_status
-                _count_records.clear()
-                _count_all_statuses.clear()
-                _get_paginated_records.clear()
-                _get_dedup_records.clear()
+                _invalidate_lib_caches()
                 _clear_batch_selection()
                 st.session_state.pop("_batch_reason_needed", None)
                 suffix = "，原因已记入备注" if reason else ""
+                _missing = len(cids) - n
+                if _missing > 0:
+                    suffix += f"；另有 {_missing} 人没改成（可能已被队友删除）"
                 st.session_state["_status_change_msg"] = f"✅ 已将 {n} 人状态改为「{new_status}」{suffix}"
                 st.rerun()
 
@@ -2316,10 +2394,7 @@ def _library_fragment():
                         else:
                             st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") not in _batch_sel]
                             n = len(cids)
-                        _count_records.clear()
-                        _count_all_statuses.clear()
-                        _get_paginated_records.clear()
-                        _get_dedup_records.clear()
+                        _invalidate_lib_caches()
                         _clear_batch_selection()
                         st.session_state.pop("_batch_delete_confirm", None)
                         st.success(f"🗑 已删除 {n} 人")
@@ -2417,6 +2492,8 @@ def _library_fragment():
                             # 状态下拉（全状态：新发现 / 已发邮件 / 已引入 / 已拒绝 / 已淘汰）
                             # key 按频道ID存 + on_change 回调保存：批量改状态不会被残留旧值改回去
                             _ST_OPTS = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                            # 组件残值优先于 index：先用库里最新状态校准，外部同步改了状态不会显示旧值
+                            st.session_state[f"st_{_cid}"] = status
                             st.selectbox(
                                 "状态", _ST_OPTS,
                                 index=_ST_OPTS.index(status) if status in _ST_OPTS else 0,
@@ -2440,7 +2517,7 @@ def _library_fragment():
                                 st.text_input("备注", value=notes, key=f"nt_{_cid}",
                                               placeholder="例：已发邮件、回复快、要价高...",
                                               label_visibility="collapsed",
-                                              on_change=_save_note, args=(_cid,))
+                                              on_change=_note_keystroke, args=(_cid,))
 
                             # BD邮件（弹窗形式，正文一键复制）
                             if st.button("📧 生成BD邮件", key=f"genmail_db_{idx}", use_container_width=True):
@@ -2498,6 +2575,8 @@ def _library_fragment():
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
                         _ST_OPTS_L = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                        # 组件残值优先于 index：先用库里最新状态校准，外部改了不会显示旧值
+                        st.session_state[f"lst_{_cid}"] = status
                         st.selectbox(
                             "状态", _ST_OPTS_L,
                             index=_ST_OPTS_L.index(status) if status in _ST_OPTS_L else 0,
@@ -2539,29 +2618,36 @@ def _library_fragment():
                     if do_remove:
                         _remove_confirm_dialog(rec)
 
-        # 导出
+        # 导出（点按钮才拉全库；旧版每次页面刷新都搬一遍整库，含缩略图大字段）
         st.markdown("---")
-        all_records = get_all_records() if db else st.session_state.local_db
-        if all_records:
-            export_rows = []
-            for r in all_records:
-                export_rows.append({
-                    "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
-                    "内容垂类": r.get("content_category", ""),
-                    "可带货垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
-                    "评分": r.get("score_total", ""), "状态": r.get("status", ""),
-                    "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
-                    "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
-                    "发邮件日期": r.get("email_sent_date", ""),
-                    "引入日期": r.get("introduced_date", ""),
-                })
-            buffer = BytesIO()
-            pd.DataFrame(export_rows).to_excel(buffer, index=False, engine="openpyxl")
-            st.download_button(
-                "📥 导出网红库 (Excel)", data=buffer.getvalue(),
-                file_name=f"网红库_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+        if st.button("📥 导出网红库 (Excel)", key="export_all_btn"):
+            with st.spinner("正在整理全库数据…"):
+                all_records = get_all_records() if db else st.session_state.local_db
+            st.session_state["_export_rows"] = [{
+                "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
+                "内容垂类": r.get("content_category", ""),
+                "可带货垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
+                "评分": r.get("score_total", ""), "状态": r.get("status", ""),
+                "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
+                "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
+                "发邮件日期": r.get("email_sent_date", ""),
+                "引入日期": r.get("introduced_date", ""),
+            } for r in all_records]
+        if st.session_state.get("_export_rows") is not None:
+            export_rows = st.session_state["_export_rows"]
+            if export_rows:
+                buffer = BytesIO()
+                pd.DataFrame(export_rows).to_excel(buffer, index=False, engine="openpyxl")
+                st.download_button(
+                    "⬇️ 点我下载文件", data=buffer.getvalue(),
+                    file_name=f"网红库_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            else:
+                st.info("库里暂时没有可导出的数据")
+            if st.button("✖ 收起导出", key="export_collapse"):
+                st.session_state.pop("_export_rows", None)
+                st.rerun()
 
 
 with tab_database:

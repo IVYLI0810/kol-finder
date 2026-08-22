@@ -165,13 +165,20 @@ def run_sync(db) -> dict:
 
     # 含软删除一起读：软删除的网红要在「标已引入」时显式跳过，防止复活
     kol_records = db.get_all(include_deleted=True)
+    if getattr(db, "last_query_failed", False):
+        # 读库失败 ≠ 库是空的：此时任何「补建/回收」都可能造成重复记录，整轮跳过
+        return {"marked": 0, "created": 0, "skipped": 0, "ignored": 0,
+                "terminated": 0, "fulfilled_total": 0, "failed": True}
     kol_map = {r.get("channel_id"): r for r in kol_records if r.get("channel_id")}
 
-    marked = created = terminated = skipped = 0
+    marked = created = terminated = skipped = ignored = 0
 
     # 预计算库侧归一化标识（频道ID/主页链接），补建时判「不同ID同一频道」用
     kol_refs = [(cid, _norm_refs(r.get("channel_id"), r.get("channel_url")))
                 for cid, r in kol_map.items()]
+
+    # 只有这两个状态允许被自动标「已引入」；已拒绝/已淘汰等人工结论绝不回改
+    _MARKABLE = ("新发现", "已发邮件")
 
     # 1) 履约中的网红 -> 标记已引入 / 自动补建
     for y in fulfilled:
@@ -182,9 +189,11 @@ def run_sync(db) -> dict:
         if rec is not None:
             if rec.get("status") == "已删除":
                 continue  # 软删除的网红不自动复活
-            if rec.get("status") != "已引入":
+            if rec.get("status") in _MARKABLE:
                 if db.update_status(cid, "已引入"):
                     marked += 1
+            elif rec.get("status") != "已引入":
+                ignored += 1  # 已拒绝/已淘汰等人工结论，保留不动
         else:
             yrefs = _norm_refs(y.get("channel_id"), y.get("channel_url"))
             if any(yrefs & krefs for _, krefs in kol_refs):
@@ -194,7 +203,8 @@ def run_sync(db) -> dict:
                 created += 1
                 kol_map[cid] = {"channel_id": cid, "status": "已引入", "notes": ""}
 
-    # 2) 退出履约检查：只处理已是「已引入」的记录，状态不回退
+    # 2) 退出履约检查：已是「已引入」但不再履约、也没正常做完的，
+    #    状态回收成「已发邮件」（合作黄了就不算引入业绩），并备注留痕
     stamp = datetime.now().strftime("%m-%d")
     for cid, rec in kol_map.items():
         if rec.get("status") != "已引入" or cid in fulfilled_ids:
@@ -206,11 +216,20 @@ def run_sync(db) -> dict:
         latest = db.get_record(cid)
         notes = (latest.get("notes") or "") if latest else (rec.get("notes") or "")
         if "合作意外终止" in notes:
-            continue  # 已标注过，不重复
-        new_notes = (notes + "\n" if notes else "") + \
-            f"[{stamp} YTS退出履约] 合作意外终止（YTS同步自动标注）"
-        if db.update_notes(cid, new_notes):
-            terminated += 1
+            noted = True  # 已标注过，不重复写
+        else:
+            new_notes = (notes + "\n" if notes else "") + \
+                f"[{stamp} YTS退出履约] 合作意外终止（YTS同步自动标注）"
+            noted = db.update_notes(cid, new_notes)
+        if y is not None:
+            # YTS 里确实有这条记录（取消/流回/淘汰）→ 回收「已引入」状态
+            if db.revert_from_introduced(cid):
+                terminated += 1
+            elif noted:
+                terminated += 1  # 回收失败至少备注已生效，不算丢信号
+        elif noted:
+            terminated += 1  # YTS 查无此人：维持旧行为，只备注不改状态
 
     return {"marked": marked, "created": created, "skipped": skipped,
-            "terminated": terminated, "fulfilled_total": len(fulfilled_ids)}
+            "ignored": ignored, "terminated": terminated,
+            "fulfilled_total": len(fulfilled_ids)}
