@@ -12,8 +12,29 @@ YTS 履约同步（只读宜搭，不改 YTS 任何数据）
 
 import json
 import os
+import re as _re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+
+
+def _norm_refs(*parts):
+    """把频道ID/主页链接/handle 归一成可比较的标识集合（去重用）。"""
+    refs = set()
+    for s in parts:
+        if not s:
+            continue
+        s = str(s).strip().lower()
+        if not s:
+            continue
+        s = _re.sub(r"^https?://", "", s)
+        s = _re.sub(r"^www\.", "", s)
+        s = s.rstrip("/")
+        s = _re.sub(r"^(youtube\.com|youtu\.be)/", "", s)
+        m = _re.match(r"^(?:channel/|c/|user/)?(@?[a-z0-9._-]+)$", s)
+        if m:
+            refs.add(m.group(1).lstrip("@"))
+    return refs
+
 
 # 宜搭表单常量（与 YTS 主站 yts_yida_store 保持一致，非机密）
 APP_TYPE = "APP_N85O3OPKB9OO52S4KCTD"
@@ -133,7 +154,7 @@ def is_fulfilled(rec: dict) -> bool:
 def run_sync(db) -> dict:
     """
     执行一次同步（需要传入挖掘系统数据库实例）。
-    返回 {"marked", "created", "terminated", "fulfilled_total"}。
+    返回 {"marked", "created", "skipped", "terminated", "fulfilled_total"}。
     """
     reader = YTSReader()
     yida_records = reader.fetch_all()
@@ -142,10 +163,15 @@ def run_sync(db) -> dict:
     fulfilled_ids = {r.get("channel_id") for r in fulfilled if r.get("channel_id")}
     yida_map = {r.get("channel_id"): r for r in yida_records if r.get("channel_id")}
 
-    kol_records = db.get_all()
+    # 含软删除一起读：软删除的网红要在「标已引入」时显式跳过，防止复活
+    kol_records = db.get_all(include_deleted=True)
     kol_map = {r.get("channel_id"): r for r in kol_records if r.get("channel_id")}
 
-    marked = created = terminated = 0
+    marked = created = terminated = skipped = 0
+
+    # 预计算库侧归一化标识（频道ID/主页链接），补建时判「不同ID同一频道」用
+    kol_refs = [(cid, _norm_refs(r.get("channel_id"), r.get("channel_url")))
+                for cid, r in kol_map.items()]
 
     # 1) 履约中的网红 -> 标记已引入 / 自动补建
     for y in fulfilled:
@@ -154,10 +180,16 @@ def run_sync(db) -> dict:
             continue
         rec = kol_map.get(cid)
         if rec is not None:
+            if rec.get("status") == "已删除":
+                continue  # 软删除的网红不自动复活
             if rec.get("status") != "已引入":
                 if db.update_status(cid, "已引入"):
                     marked += 1
         else:
+            yrefs = _norm_refs(y.get("channel_id"), y.get("channel_url"))
+            if any(yrefs & krefs for _, krefs in kol_refs):
+                skipped += 1  # 库里已有同一频道（ID/链接写法不同），不重复补建
+                continue
             if db.add_influencer_from_yts(y):
                 created += 1
                 kol_map[cid] = {"channel_id": cid, "status": "已引入", "notes": ""}
@@ -170,7 +202,9 @@ def run_sync(db) -> dict:
         y = yida_map.get(cid)
         if y and (y.get("stage") or "") == "已完成":
             continue  # 正常做完关单，不打扰
-        notes = rec.get("notes") or ""
+        # 底稿现读库里最新备注（kol_map 里的缓存行可能已过期），读取失败再退回缓存
+        latest = db.get_record(cid)
+        notes = (latest.get("notes") or "") if latest else (rec.get("notes") or "")
         if "合作意外终止" in notes:
             continue  # 已标注过，不重复
         new_notes = (notes + "\n" if notes else "") + \
@@ -178,5 +212,5 @@ def run_sync(db) -> dict:
         if db.update_notes(cid, new_notes):
             terminated += 1
 
-    return {"marked": marked, "created": created, "terminated": terminated,
-            "fulfilled_total": len(fulfilled_ids)}
+    return {"marked": marked, "created": created, "skipped": skipped,
+            "terminated": terminated, "fulfilled_total": len(fulfilled_ids)}

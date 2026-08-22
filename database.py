@@ -81,13 +81,32 @@ class InfluencerDB:
     # 查询
     # ============================================================
 
-    def get_all(self) -> list[dict]:
-        """获取所有网红记录"""
+    def get_all(self, include_deleted: bool = False) -> list[dict]:
+        """获取所有网红记录（默认不含软删除的；include_deleted=True 时返回全部）"""
         try:
-            result = self.client.table(self.TABLE_NAME).select("*").execute()
+            query = self.client.table(self.TABLE_NAME).select("*")
+            if not include_deleted:
+                # 软删除的记录不再出现在 UI 读取里，也防止被同步流程复活
+                query = query.neq("status", "已删除")
+            result = query.execute()
             return result.data or []
         except Exception:
             return []
+
+    def get_record(self, channel_id: str) -> dict | None:
+        """读取单条记录（写入前现读最新内容用，如备注并发判定）；不存在或异常返回 None"""
+        try:
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .select("*")
+                .eq("channel_id", channel_id)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            return rows[0] if rows else None
+        except Exception:
+            return None
 
     def get_by_status(self, status: str) -> list[dict]:
         """按状态查询"""
@@ -96,6 +115,7 @@ class InfluencerDB:
                 self.client.table(self.TABLE_NAME)
                 .select("*")
                 .eq("status", status)
+                .neq("status", "已删除")
                 .execute()
             )
             return result.data or []
@@ -144,6 +164,7 @@ class InfluencerDB:
             result = (
                 self.client.table(self.TABLE_NAME)
                 .select(self.DEDUP_FIELDS)
+                .neq("status", "已删除")
                 .execute()
             )
             return result.data or []
@@ -157,6 +178,8 @@ class InfluencerDB:
         """按当前筛选条件计数（用于分页）"""
         try:
             query = self.client.table(self.TABLE_NAME).select("*", count="exact")
+            # 软删除的记录不参与计数/搜索
+            query = query.neq("status", "已删除")
             if status and status != "全部":
                 query = query.eq("status", status)
             if category:
@@ -207,6 +230,8 @@ class InfluencerDB:
                                name_query: str = ""):
         """构建设分页查询（不执行）。"""
         query = self.client.table(self.TABLE_NAME).select(fields)
+        # 软删除的记录不进列表/搜索结果
+        query = query.neq("status", "已删除")
 
         if status and status != "全部":
             query = query.eq("status", status)
@@ -443,14 +468,34 @@ class InfluencerDB:
         result = {"success": 0, "updated": 0, "skipped": 0, "failed": 0, "failed_lines": []}
 
         # 先把混合格式（UC ID / @handle / 各种链接 / 视频链接）统一解析成频道ID
-        # 实在无法识别的行计入 failed 并记录原文，不再静默吞掉
-        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(channel_ids, api_key, quota)
+        # 实在无法识别的行计入 failed 并记录原文和原因，不再静默吞掉
+        fail_reasons = {}
+        resolved_ids, unresolvable, raw_by_id = resolve_channel_ids(
+            channel_ids, api_key, quota, fail_reasons)
         result["failed"] += len(unresolvable)
         result["failed_lines"] = list(unresolvable)
+        result["failed_reasons"] = fail_reasons
 
-        # 区分已存在 / 新博主
-        existing_ids = [cid for cid in resolved_ids if self.exists(cid)]
-        new_ids = [cid for cid in resolved_ids if not self.exists(cid)]
+        # 区分已存在 / 软删除可恢复 / 新博主（一次 in_ 查询，避免逐条 exists 的 N+1；
+        # 查询失败直接中止导入，宁可报错也不把已有博主当新人重复插入）
+        status_by_id = {}
+        try:
+            _rows = (
+                self.client.table(self.TABLE_NAME)
+                .select("channel_id,status")
+                .in_("channel_id", resolved_ids)
+                .execute()
+            ).data or []
+            status_by_id = {r["channel_id"]: (r.get("status") or "") for r in _rows}
+        except Exception:
+            result["failed"] += len(resolved_ids)
+            result["failed_lines"] += [raw_by_id.get(c, c) for c in resolved_ids]
+            return result
+        deleted_ids = [cid for cid in resolved_ids
+                       if status_by_id.get(cid) == "已删除"]
+        existing_ids = [cid for cid in resolved_ids
+                        if cid in status_by_id and status_by_id[cid] != "已删除"]
+        new_ids = [cid for cid in resolved_ids if cid not in status_by_id]
         result["skipped"] = len(existing_ids)
 
         today = datetime.now().strftime("%Y-%m-%d")
@@ -472,6 +517,17 @@ class InfluencerDB:
                     result["updated"] += 1
                 except Exception:
                     result["failed"] += 1
+
+        # 软删除的博主：重新导入 = 恢复（始终生效，不受 update_existing 开关限制）
+        for cid in deleted_ids:
+            update_data = {"status": status, "status_date": now}
+            if status == "已发邮件":
+                update_data["email_sent_date"] = _sent_date_for(cid)
+            try:
+                self.client.table(self.TABLE_NAME).update(update_data).eq("channel_id", cid).execute()
+                result["updated"] += 1
+            except Exception:
+                result["failed"] += 1
 
         if not new_ids:
             return result
@@ -654,10 +710,16 @@ class InfluencerDB:
     # ============================================================
 
     def remove(self, channel_id: str) -> bool:
-        """从库中移除"""
+        """从库中移除（软删除：状态改为「已删除」，YTS 同步不会再自动恢复）"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
         try:
-            self.client.table(self.TABLE_NAME).delete().eq("channel_id", channel_id).execute()
-            return True
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update({"status": "已删除", "status_date": now})
+                .eq("channel_id", channel_id)
+                .execute()
+            )
+            return len(result.data or []) >= 1
         except Exception:
             return False
 
@@ -683,13 +745,14 @@ class InfluencerDB:
             return 0
 
     def batch_remove(self, channel_ids: list[str]) -> int:
-        """批量删除，返回成功删除的数量"""
+        """批量删除（软删除：状态改为「已删除」），返回成功删除的数量"""
         if not channel_ids:
             return 0
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
         try:
             result = (
                 self.client.table(self.TABLE_NAME)
-                .delete()
+                .update({"status": "已删除", "status_date": now})
                 .in_("channel_id", channel_ids)
                 .execute()
             )

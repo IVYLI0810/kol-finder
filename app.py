@@ -17,6 +17,28 @@ import requests
 
 from streamlit_local_storage import LocalStorage
 
+# Streamlit 常驻进程不会重新 import 改过的本地模块（云端部署后 database 等
+# 还是旧代码，新 app.py 调旧方法直接 TypeError）。改为按文件修改时间触发：
+# 代码文件真的变了才热换；进程级锁串行化 reload（reload 非线程安全，
+# 10 人共用时不能多个会话同时 reload）。
+import importlib as _importlib
+import os as _os
+import threading as _threading
+import database as _database_mod
+import youtube_api as _youtube_mod
+import ai_analyzer as _ai_mod
+_reload_lock = getattr(_database_mod, "_hot_reload_lock", None) or _threading.Lock()
+_database_mod._hot_reload_lock = _reload_lock
+with _reload_lock:
+    for _m in (_database_mod, _youtube_mod, _ai_mod):
+        try:
+            _disk_mtime = _os.path.getmtime(_m.__file__)
+        except OSError:
+            continue
+        if getattr(_m, "_loaded_mtime", None) != _disk_mtime:
+            _importlib.reload(_m)
+            _m._loaded_mtime = _disk_mtime
+
 from youtube_api import (
     QuotaTracker, search_and_verify, get_channels, verify_channel,
     score_channel, search_videos, should_exclude, resolve_channel_ids,
@@ -554,7 +576,10 @@ def _apply_status_change(rec: dict, new_status: str, reason: str = ""):
     if _db:
         _db.update_status(cid, new_status)
         if reason.strip():
-            _db.update_notes(cid, _append_reason(rec.get("notes", "") or "", new_status, reason))
+            # 底稿现读库里最新备注（缓存行可能已过期），避免覆盖别人的并发编辑
+            latest = _db.get_record(cid)
+            old_notes = (latest.get("notes") or "") if latest else (rec.get("notes", "") or "")
+            _db.update_notes(cid, _append_reason(old_notes, new_status, reason))
     else:
         for lr in st.session_state.local_db:
             if lr.get("channel_id") == cid:
@@ -988,6 +1013,58 @@ def bd_email_dialog(rec):
 
     st.markdown("##### 📋 邮件正文（点右上角图标一键复制）")
     st.code(st.session_state[bk], language=None)
+
+
+@st.dialog("🗑 从库中移除", width="small")
+def _remove_confirm_dialog(rec):
+    """单条删除二次确认弹窗：手滑点 🗑 不会直接丢数据。"""
+    name = rec.get("channel_name", "未知") or "未知"
+    st.warning(f"确定要把「{name}」从网红库移除吗？")
+    st.caption("将从网红库隐藏（软删除），YTS 同步不会再自动恢复；如确需彻底删除请联系管理员。")
+    c_ok, c_no = st.columns(2)
+    with c_ok:
+        do_ok = st.button("确定移除", type="primary", use_container_width=True)
+    with c_no:
+        do_no = st.button("取消", use_container_width=True)
+    if do_no:
+        st.rerun()
+    if do_ok:
+        _db = get_db()
+        cid = rec.get("channel_id", "")
+        if _db:
+            _db.remove(cid)
+        else:
+            st.session_state.local_db = [
+                r for r in st.session_state.local_db if r.get("channel_id") != cid]
+        _count_records.clear()
+        _get_paginated_records.clear()
+        _get_dedup_records.clear()
+        st.session_state["_status_change_msg"] = f"🗑 已移除「{name}」"
+        st.rerun()
+
+
+# 导入失败原因的展示顺序（常见的排前面）
+_FAIL_REASON_ORDER = [
+    "频道已不存在（YouTube 查无此号）",
+    "格式无法识别（不是频道链接/handle）",
+    "视频链接失效，反查不到所属频道",
+]
+
+
+def _show_import_failures(failed_lines: list, reasons: dict):
+    """导入失败行按原因分组展示，使用者一眼看出哪些该改格式、哪些是频道没了。"""
+    if not failed_lines:
+        return
+    groups: dict = {}
+    for line in failed_lines:
+        groups.setdefault(reasons.get(line, "其他原因"), []).append(line)
+    ordered = [r for r in _FAIL_REASON_ORDER if r in groups]
+    ordered += [r for r in groups if r not in _FAIL_REASON_ORDER]
+    parts = []
+    for reason in ordered:
+        lines = groups[reason]
+        parts.append(f"**{reason}** · {len(lines)} 行\n" + "\n".join(f"· {l}" for l in lines))
+    st.warning("以下行导入失败：\n\n" + "\n\n".join(parts))
 
 
 # ---------- 缩略图服务端代理 ----------
@@ -1815,6 +1892,44 @@ def _library_fragment():
         st.success(_chg_msg)
 
     db = get_db()
+
+    # ---- YTS 履约自动同步：每次打开网红库悄悄对一遍（5 分钟冷却，防频繁调用）----
+    if db:
+        import time as _time
+        try:
+            import yts_sync as _yts
+        except Exception:
+            _yts = None
+            if not st.session_state.get("_yts_import_hinted"):
+                st.session_state["_yts_import_hinted"] = True
+                st.session_state["_yts_sync_msg"] = "🔗 YTS 同步模块加载失败（可能缺依赖），不影响正常使用"
+        if _yts is not None and _time.time() - st.session_state.get("_yts_sync_ts", 0) > 300:
+            st.session_state["_yts_sync_ts"] = _time.time()
+            _summary = None
+            try:
+                if _yts.yts_available():
+                    with st.spinner("正在同步 YTS 履约状态…"):
+                        _summary = _yts.run_sync(db)
+                elif not st.session_state.get("_yts_nokey_hinted"):
+                    st.session_state["_yts_nokey_hinted"] = True
+                    st.session_state["_yts_sync_msg"] = "🔗 YTS 同步未接通（未配置宜搭钥匙），两边暂不自动对齐"
+            except Exception:
+                if not st.session_state.get("_yts_err_hinted"):
+                    st.session_state["_yts_err_hinted"] = True
+                    st.session_state["_yts_sync_msg"] = "🔗 YTS 这次没同步成功（网络或宜搭波动），不影响正常使用"
+            if _summary and (_summary["marked"] or _summary["created"]
+                             or _summary["terminated"] or _summary.get("skipped")):
+                _count_records.clear()
+                _get_paginated_records.clear()
+                _get_dedup_records.clear()
+                _skipped = _summary.get("skipped", 0)
+                st.session_state["_yts_sync_msg"] = (
+                    f"🔗 YTS 履约已同步：{_summary['marked']} 人标记已引入 · "
+                    f"{_summary['created']} 人自动补建 · {_summary['terminated']} 人标注合作终止"
+                    + (f" · {_skipped} 人因库中已有同频道跳过" if _skipped else "")
+                )
+                st.rerun()
+
     user_name = st.session_state.user_name or ""
 
     # 初始化筛选/分页状态
@@ -1844,11 +1959,19 @@ def _library_fragment():
         val = st.session_state.get(f"nt_{cid}", "")
         _db = get_db()
         if _db:
+            # 写入前现读最新备注做并发判定：和渲染时的底稿、本次要存的值都不同，
+            # 说明编辑期间被别人改过——仍按本人版本保存，但提示一下
+            latest = _db.get_record(cid) if _db else None
+            base = st.session_state.get(f"ntbase_{cid}")
+            conflict = latest is not None and (latest.get("notes") or "") not in (base, val)
             _db.update_notes(cid, val)
+            if conflict:
+                st.session_state["_status_change_msg"] = "⚠️ 备注在你编辑期间被其他人修改过，已按你的版本保存"
         else:
             for lr in st.session_state.local_db:
                 if lr.get("channel_id") == cid:
                     lr["notes"] = val
+        st.session_state[f"ntbase_{cid}"] = val
         _count_records.clear()
         _count_all_statuses.clear()
         _get_paginated_records.clear()
@@ -2182,7 +2305,7 @@ def _library_fragment():
             if do_batch_delete:
                 st.session_state["_batch_delete_confirm"] = True
             if st.session_state.get("_batch_delete_confirm"):
-                st.warning(f"⚠️ 确定要删除选中的 {len(_batch_sel)} 人吗？此操作不可恢复！")
+                st.warning(f"⚠️ 确定要删除选中的 {len(_batch_sel)} 人吗？将从网红库隐藏（软删除），重新导入可恢复。")
                 dc1, dc2, _ = st.columns([1, 1, 4])
                 with dc1:
                     if st.button("确定删除", key="batch_confirm_del"):
@@ -2263,7 +2386,7 @@ def _library_fragment():
 
                             name = rec.get("channel_name", "未知")
                             url = rec.get("channel_url", "#")
-                            subs = rec.get("subscribers", 0)
+                            subs = rec.get("subscribers") or 0
                             score = rec.get("score_total", "-")
                             cat = rec.get("category", "")
                             ccat = rec.get("content_category", "")
@@ -2313,6 +2436,7 @@ def _library_fragment():
                             with c_rm:
                                 do_remove = st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary")
                             with c_nt:
+                                st.session_state.setdefault(f"ntbase_{_cid}", notes)
                                 st.text_input("备注", value=notes, key=f"nt_{_cid}",
                                               placeholder="例：已发邮件、回复快、要价高...",
                                               label_visibility="collapsed",
@@ -2332,19 +2456,9 @@ def _library_fragment():
                                 else:
                                     st.error(msg)
 
-                            # 删除处理
+                            # 删除处理（弹窗二次确认，防手滑误删）
                             if do_remove:
-                                _db = get_db()
-                                cid = rec.get("channel_id", "")
-                                if _db:
-                                    _db.remove(cid)
-                                else:
-                                    st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                                _count_records.clear()
-                                _count_all_statuses.clear()
-                                _get_paginated_records.clear()
-                                _get_dedup_records.clear()
-                                st.rerun()
+                                _remove_confirm_dialog(rec)
         else:
             # 列表模式：一行一个博主，字段对齐成表格，适合快速扫全库
             for idx, rec in enumerate(records_page):
@@ -2355,7 +2469,7 @@ def _library_fragment():
                     status = rec.get("status", "新发现")
                     name = rec.get("channel_name", "未知")
                     url = rec.get("channel_url", "#")
-                    subs = rec.get("subscribers", 0)
+                    subs = rec.get("subscribers") or 0
                     score = rec.get("score_total", "-")
                     cat = rec.get("category", "")
                     ccat = rec.get("content_category", "")
@@ -2421,19 +2535,9 @@ def _library_fragment():
                         else:
                             st.error(msg)
 
-                    # 删除处理
+                    # 删除处理（弹窗二次确认，防手滑误删）
                     if do_remove:
-                        _db = get_db()
-                        cid = rec.get("channel_id", "")
-                        if _db:
-                            _db.remove(cid)
-                        else:
-                            st.session_state.local_db = [r for r in st.session_state.local_db if r.get("channel_id") != cid]
-                        _count_records.clear()
-                        _count_all_statuses.clear()
-                        _get_paginated_records.clear()
-                        _get_dedup_records.clear()
-                        st.rerun()
+                        _remove_confirm_dialog(rec)
 
         # 导出
         st.markdown("---")
@@ -2569,14 +2673,13 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                         msg += "（失败 = 链接格式无法识别，或频道已不存在）"
                     st.success(msg)
                     if result.get("failed_lines"):
-                        st.warning(
-                            "以下行导入失败，请检查后重试：\n\n"
-                            + "\n\n".join(f"· {line}" for line in result["failed_lines"])
-                        )
+                        _show_import_failures(result["failed_lines"], result.get("failed_reasons", {}))
                 else:
                     # 本地模式
+                    _fail_reasons = {}
                     resolved, bad_lines, raw_map = resolve_channel_ids(
-                        lines, st.session_state.api_key, st.session_state.quota)
+                        lines, st.session_state.api_key, st.session_state.quota,
+                        _fail_reasons)
                     chs = get_channels(resolved, st.session_state.api_key, st.session_state.quota)
                     # 和 Supabase 模式一样走补全（播放/邮箱/评分/AI 垂类）
                     from database import enrich_import_channels
@@ -2606,10 +2709,7 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                         added += 1
                     st.success(f"✅ 已导入 {added} 个频道，更新 {updated} 个（本地模式），无法识别 {len(bad_lines)} 行")
                     if bad_lines:
-                        st.warning(
-                            "以下行导入失败，请检查后重试：\n\n"
-                            + "\n\n".join(f"· {line}" for line in bad_lines)
-                        )
+                        _show_import_failures(bad_lines, _fail_reasons)
 
     st.markdown("---")
     with st.expander("🔄 一键补全旧数据（以前导入、缺播放/评分/邮箱的老记录）"):
