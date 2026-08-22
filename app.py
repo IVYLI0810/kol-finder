@@ -23,8 +23,15 @@ from youtube_api import (
     CATEGORY_KEYWORDS, VALUE_KEYWORDS, DEFAULT_CONFIG, estimate_search_cost,
     split_main_pending, split_line_date, split_line_meta, parse_import_excel,
 )
-from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, DASHSCOPE_MODEL,
+from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, CATEGORY_EN_MAP, DASHSCOPE_MODEL,
                          generate_keywords, generate_bd_email_ai)
+
+
+def _cat_export_label(cat) -> str:
+    """垂类导出标签：韩文垂类 → 「韩文（英文官方名）」；非标准垂类（老中文垂类等）原样返回"""
+    cat = str(cat or "").strip()
+    en = CATEGORY_EN_MAP.get(cat, "")
+    return f"{cat}（{en}）" if en else cat
 
 # ============================================================
 # 团队公共库配置（写死在代码里，所有人共用，不用每次填）
@@ -1755,7 +1762,7 @@ with tab_search:
                     for ch in filtered:
                         export_data.append({
                             "频道名": ch["channel_name"], "主页链接": ch["channel_url"],
-                            "垂类(AI判定)": ch.get("category", ""),
+                            "垂类(AI判定)": _cat_export_label(ch.get("category", "")),
                             "AI相关度": ch.get("ai_relevance", "") if ch.get("ai_analyzed") else "",
                             "AI标签": " / ".join(ch.get("ai_tags", [])),
                             "订阅量": ch["subscribers"],
@@ -2172,7 +2179,7 @@ def _library_fragment():
                     if r.get("channel_id") in _batch_sel:
                         sel_rows.append({
                             "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
-                            "垂类": r.get("category", ""), "订阅量": r.get("subscribers", 0),
+                            "垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
                             "评分": r.get("score_total", ""), "状态": r.get("status", ""),
                             "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
                             "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
@@ -2394,7 +2401,7 @@ def _library_fragment():
             for r in all_records:
                 export_rows.append({
                     "频道名": r.get("channel_name", ""), "链接": r.get("channel_url", ""),
-                    "垂类": r.get("category", ""), "订阅量": r.get("subscribers", 0),
+                    "垂类": _cat_export_label(r.get("category", "")), "订阅量": r.get("subscribers", 0),
                     "评分": r.get("score_total", ""), "状态": r.get("status", ""),
                     "邮箱": r.get("emails", ""), "挖掘人": r.get("discovered_by", ""),
                     "备注": r.get("notes", ""), "添加日期": r.get("added_date", ""),
