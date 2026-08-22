@@ -788,7 +788,7 @@ def get_all_records() -> list[dict]:
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _count_records(db_url, db_key, status, category_tuple, content_category_tuple,
-                   discoverer, discoverer_name):
+                   discoverer, discoverer_name, name_q):
     """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
@@ -798,13 +798,14 @@ def _count_records(db_url, db_key, status, category_tuple, content_category_tupl
         content_category=list(content_category_tuple) if content_category_tuple else None,
         discoverer=discoverer,
         discoverer_name=discoverer_name,
+        name_query=name_q,
     )
 
 
 @st.cache_data(ttl=45, show_spinner=False)
 def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
                            content_category_tuple,
-                           discoverer, discoverer_name, sort_by, descending):
+                           discoverer, discoverer_name, sort_by, descending, name_q):
     """带缓存的分页查询（内部临时创建 DB 连接）"""
     from database import InfluencerDB
     db = InfluencerDB(db_url, db_key)
@@ -818,6 +819,7 @@ def _get_paginated_records(db_url, db_key, page, page_size, status, category_tup
         discoverer_name=discoverer_name,
         sort_by=sort_by,
         descending=descending,
+        name_query=name_q,
     )
 
 
@@ -1820,6 +1822,7 @@ def _library_fragment():
         "filter_status": "全部",
         "filter_cat": [],
         "filter_ccat": [],
+        "filter_q": "",
         "filter_discoverer": "全部",
         "db_sort": "添加时间",
         "db_page": 1,
@@ -1886,7 +1889,14 @@ def _library_fragment():
         st.markdown("")
 
         # 筛选
-        col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(5)
+        col_f0, col_f1, col_f2, col_f3, col_f4, col_f5 = st.columns(
+            [1.2, 0.9, 1.1, 1.1, 0.9, 0.8])
+        with col_f0:
+            st.text_input(
+                "搜索", key="filter_q", on_change=_reset_db_page,
+                placeholder="🔍 昵称 / 频道ID",
+                help="按频道昵称或频道ID模糊搜索",
+            )
         with col_f1:
             st.selectbox(
                 "状态", ["全部", "新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"],
@@ -1923,6 +1933,7 @@ def _library_fragment():
         category = tuple(st.session_state.filter_cat) if st.session_state.filter_cat else tuple()
         content_category = tuple(st.session_state.filter_ccat) if st.session_state.filter_ccat else tuple()
         discoverer = st.session_state.filter_discoverer
+        name_q = (st.session_state.filter_q or "").strip()
         sort_by = st.session_state.db_sort
         page_size = st.session_state.db_page_size
         page = st.session_state.db_page
@@ -1932,6 +1943,7 @@ def _library_fragment():
             filtered_count = _count_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 status, category, content_category, discoverer, user_name,
+                name_q,
             )
             total_pages = max(1, (filtered_count + page_size - 1) // page_size)
             if page > total_pages:
@@ -1940,7 +1952,7 @@ def _library_fragment():
             records_page = _get_paginated_records(
                 st.session_state.supabase_url, st.session_state.supabase_key,
                 page, page_size, status, category, content_category,
-                discoverer, user_name, sort_by, True,
+                discoverer, user_name, sort_by, True, name_q,
             )
         else:
             sort_map = {
@@ -1950,6 +1962,10 @@ def _library_fragment():
                 "最近更新": lambda x: x.get("last_upload", ""),
             }
             local = st.session_state.local_db[:]
+            if name_q:
+                kw = name_q.lower()
+                local = [r for r in local if kw in (r.get("channel_name") or "").lower()
+                         or kw in (r.get("channel_id") or "").lower()]
             if status != "全部":
                 local = [r for r in local if r.get("status") == status]
             if st.session_state.filter_cat:

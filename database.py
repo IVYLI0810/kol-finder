@@ -8,6 +8,14 @@ import json
 from supabase import create_client, Client
 
 
+def _name_filter(q: str) -> str:
+    """名字/频道ID 模糊搜索的 PostgREST or 过滤串。
+    去掉会破坏 or() 语法的字符（逗号/括号/引号）。"""
+    import re
+    q = re.sub(r'[(),"\']', "", q.strip()).strip()
+    return f"channel_name.ilike.*{q}*,channel_id.ilike.*{q}*"
+
+
 def enrich_import_channels(channels: dict, api_key: str, quota, config: dict = None) -> dict:
     """
     批量导入的频道补全：走和挖掘站一样的「验证采集 → AI 垂类 → 自动评分」流程，
@@ -144,7 +152,8 @@ class InfluencerDB:
 
     def count_records(self, status: str = None, category: list[str] = None,
                       content_category: list[str] = None,
-                      discoverer: str = None, discoverer_name: str = "") -> int:
+                      discoverer: str = None, discoverer_name: str = "",
+                      name_query: str = "") -> int:
         """按当前筛选条件计数（用于分页）"""
         try:
             query = self.client.table(self.TABLE_NAME).select("*", count="exact")
@@ -159,6 +168,8 @@ class InfluencerDB:
                     query = query.eq("discovered_by", discoverer_name)
                 else:
                     query = query.eq("discovered_by", discoverer)
+            if name_query:
+                query = query.or_(_name_filter(name_query))
             result = query.execute()
             return result.count or 0
         except Exception:
@@ -192,7 +203,8 @@ class InfluencerDB:
                                status: str, category: list[str],
                                content_category: list[str],
                                discoverer: str, discoverer_name: str,
-                               sort_by: str, descending: bool):
+                               sort_by: str, descending: bool,
+                               name_query: str = ""):
         """构建设分页查询（不执行）。"""
         query = self.client.table(self.TABLE_NAME).select(fields)
 
@@ -207,6 +219,8 @@ class InfluencerDB:
                 query = query.eq("discovered_by", discoverer_name)
             else:
                 query = query.eq("discovered_by", discoverer)
+        if name_query:
+            query = query.or_(_name_filter(name_query))
 
         sort_col = self.SORT_COLUMNS.get(sort_by, "added_date")
         query = query.order(sort_col, desc=descending)
@@ -219,7 +233,8 @@ class InfluencerDB:
                               status: str = None, category: list[str] = None,
                               content_category: list[str] = None,
                               discoverer: str = None, discoverer_name: str = "",
-                              sort_by: str = "添加时间", descending: bool = True) -> list[dict]:
+                              sort_by: str = "添加时间", descending: bool = True,
+                              name_query: str = "") -> list[dict]:
         """
         分页获取网红记录，筛选和排序都在 Supabase 服务端完成。
         只返回列表页需要的轻量字段，减少网络传输和内存占用。
@@ -228,6 +243,7 @@ class InfluencerDB:
             query = self._build_paginated_query(
                 self.LIGHT_FIELDS, page, page_size, status, category,
                 content_category, discoverer, discoverer_name, sort_by, descending,
+                name_query=name_query,
             )
             result = query.execute()
             return result.data or []
@@ -238,6 +254,7 @@ class InfluencerDB:
                 query = self._build_paginated_query(
                     self.LIGHT_FIELDS_FALLBACK, page, page_size, status, category,
                     None, discoverer, discoverer_name, sort_by, descending,
+                    name_query=name_query,
                 )
                 result = query.execute()
                 return result.data or []
