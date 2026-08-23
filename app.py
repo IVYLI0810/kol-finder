@@ -1443,6 +1443,10 @@ if st.session_state.user_name:
                 # 网红库显示模式（卡片/列表）也从个人档案恢复，默认列表
                 _merged["view_mode"] = _personal.get("view_mode", "list")
                 st.session_state.config = _merged
+                # 同步写回侧边栏输入框的组件状态：输入框带 key，显示值以 key 为准，
+                # 不写回的话刷新后输入框会残留旧空值、还会把刚加载的身份覆盖回空
+                st.session_state[f"sb_sender_{st.session_state.user_name}"] = _merged.get("sender_name", "")
+                st.session_state[f"sb_kkt_{st.session_state.user_name}"] = _merged.get("kkt_id", "")
         st.session_state._settings_loaded_for = st.session_state.user_name
         # 加载完刷新一次，让侧边栏"BD邮件身份"立刻显示当前身份的值
         st.rerun()
