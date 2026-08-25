@@ -787,6 +787,21 @@ class InfluencerDB:
         except Exception:
             return 0
 
+    def batch_update_discoverer(self, channel_ids: list[str], new_discoverer: str) -> int:
+        """批量转移挖掘人（换负责人），返回成功更新的数量"""
+        if not channel_ids:
+            return 0
+        try:
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update({"discovered_by": new_discoverer})
+                .in_("channel_id", channel_ids)
+                .execute()
+            )
+            return len(result.data or [])
+        except Exception:
+            return 0
+
     def batch_remove(self, channel_ids: list[str]) -> int:
         """批量删除（软删除：状态改为「已删除」），返回成功删除的数量"""
         if not channel_ids:

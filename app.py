@@ -2253,7 +2253,7 @@ def _library_fragment():
         # 选中后显示批量操作按钮
         if _batch_sel:
             st.markdown("")
-            bc1, bc2, bc3, bc4, bc5 = st.columns([2, 1.4, 1.4, 1.4, 1.4])
+            bc1, bc2, bc3, bc4, bc5, bc6 = st.columns([1.8, 1.2, 1.2, 1.2, 1.2, 1.4])
             with bc1:
                 batch_new_status = st.selectbox(
                     "目标状态", ["已发邮件", "新发现", "已引入", "已拒绝", "已淘汰"],
@@ -2267,6 +2267,9 @@ def _library_fragment():
                 do_batch_delete = st.button("🗑 批量删除", key="batch_do_delete", use_container_width=True)
             with bc5:
                 do_batch_export = st.button("📥 导出选中", key="batch_do_export", use_container_width=True)
+            with bc6:
+                do_batch_transfer = st.button("👤 转移挖掘人", key="batch_do_transfer", use_container_width=True,
+                                              help="把选中的博主转交给其他人负责（换负责人时用）")
 
             # 批量改状态（已拒绝/已淘汰必须填原因并二次确认，其余状态立即生效）
             def _batch_apply(new_status: str, reason: str = ""):
@@ -2404,6 +2407,51 @@ def _library_fragment():
                         st.session_state.pop("_batch_delete_confirm", None)
                         st.rerun()
 
+            # 批量转移挖掘人（换负责人：选目标人 → 二次确认 → 批量转）
+            if do_batch_transfer:
+                st.session_state["_batch_transfer_open"] = True
+            if st.session_state.get("_batch_transfer_open"):
+                st.info(f"👤 将选中的 {len(_batch_sel)} 人转交给新负责人（转移后，刷新权限、"
+                        "「只看我的」筛选都跟着新负责人走）")
+                _tf_members = db.get_members() if db else sorted({
+                    r.get("discovered_by", "") for r in st.session_state.local_db
+                    if r.get("discovered_by")})
+                tc1, tc2, tc3 = st.columns([2, 1, 1])
+                with tc1:
+                    tf_target = st.selectbox(
+                        "新的负责人", _tf_members or [user_name],
+                        key="batch_transfer_target", label_visibility="collapsed",
+                        placeholder="选择要转交给谁",
+                    )
+                with tc2:
+                    if st.button("✅ 确认转移", key="batch_transfer_ok", type="primary",
+                                 use_container_width=True):
+                        if not tf_target:
+                            st.warning("请先选择新的负责人")
+                        else:
+                            _db_t = get_db()
+                            _cids_t = list(_batch_sel)
+                            if _db_t:
+                                _n_t = _db_t.batch_update_discoverer(_cids_t, tf_target)
+                            else:
+                                for _lr in st.session_state.local_db:
+                                    if _lr.get("channel_id") in _batch_sel:
+                                        _lr["discovered_by"] = tf_target
+                                _n_t = len(_cids_t)
+                            _invalidate_lib_caches()
+                            _clear_batch_selection()
+                            st.session_state.pop("_batch_transfer_open", None)
+                            _missing_t = len(_cids_t) - _n_t
+                            _msg_t = f"✅ 已将 {_n_t} 人转交给「{tf_target}」"
+                            if _missing_t > 0:
+                                _msg_t += f"；另有 {_missing_t} 人没转成（可能已被队友删除）"
+                            st.session_state["_status_change_msg"] = _msg_t
+                            st.rerun()
+                with tc3:
+                    if st.button("取消", key="batch_transfer_cancel", use_container_width=True):
+                        st.session_state.pop("_batch_transfer_open", None)
+                        st.rerun()
+
             # 导出选中
             if do_batch_export:
                 all_recs = get_all_records() if db else st.session_state.local_db
@@ -2431,6 +2479,58 @@ def _library_fragment():
                     st.info("选中的网红不在当前记录中（可能已被删除）")
 
             st.markdown("---")
+
+        # ---------- 单条变更挖掘人（折叠面板，两种显示模式都能用） ----------
+        with st.expander("👤 单条变更挖掘人（某个博主换负责人时用）"):
+            _ts_q = st.text_input("搜索博主（名字或频道ID）", key="ts_q",
+                                  placeholder="输入后按回车，显示前10个匹配")
+            _ts_db = get_db()
+            if _ts_q.strip():
+                if _ts_db:
+                    _ts_rows = _ts_db.get_records_paginated(
+                        page=1, page_size=10, name_query=_ts_q.strip())
+                else:
+                    _kw = _ts_q.strip().lower()
+                    _ts_rows = [r for r in st.session_state.local_db
+                                if _kw in (r.get("channel_name", "") or "").lower()
+                                or _kw in (r.get("channel_id", "") or "").lower()][:10]
+                if not _ts_rows:
+                    st.caption("没找到匹配的博主")
+                for _tr in _ts_rows:
+                    _tcid = _tr.get("channel_id", "")
+                    _tcur = _tr.get("discovered_by", "") or "—"
+                    _tc1, _tc2, _tc3, _tc4 = st.columns([3, 1, 2.5, 1.2])
+                    with _tc1:
+                        _render_html(f"<span class='kol-name'>{_safe(_tr.get('channel_name', ''))}</span><br>"
+                                     f"<span class='kol-sub'>现负责人：{_safe(_tcur)}</span>")
+                    with _tc2:
+                        st.caption("→")
+                    with _tc3:
+                        _tms = _ts_db.get_members() if _ts_db else sorted({
+                            r.get("discovered_by", "") for r in st.session_state.local_db
+                            if r.get("discovered_by")})
+                        _tnew = st.selectbox("新负责人", _tms or [user_name],
+                                             key=f"ts_new_{_tcid}", label_visibility="collapsed")
+                    with _tc4:
+                        if st.button("转移", key=f"ts_go_{_tcid}", use_container_width=True):
+                            if not _tnew or _tnew == _tr.get("discovered_by", ""):
+                                st.toast("新负责人和现在的一样，不用转")
+                            else:
+                                _ok_t = False
+                                if _ts_db:
+                                    _ok_t = _ts_db.batch_update_discoverer([_tcid], _tnew) == 1
+                                else:
+                                    for _lr in st.session_state.local_db:
+                                        if _lr.get("channel_id") == _tcid:
+                                            _lr["discovered_by"] = _tnew
+                                            _ok_t = True
+                                if _ok_t:
+                                    _invalidate_lib_caches()
+                                    st.session_state["_status_change_msg"] = (
+                                        f"✅ 「{_tr.get('channel_name', '')}」已转交给「{_tnew}」")
+                                    st.rerun()
+                                else:
+                                    st.toast("转移失败，请稍后再试")
 
         if view_mode == "card":
             # 卡片模式：三列紧凑小卡片（打标按键全部收进卡片内）
