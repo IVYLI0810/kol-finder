@@ -3233,8 +3233,13 @@ def _nv_add_selected(selected: list) -> None:
             return
     existing = _nv_existing_ids()
     fresh, dup = [], []
+    _seen_fresh = set()
     for c in selected:
-        (dup if c["channel_id"] in existing else fresh).append(c)
+        if c["channel_id"] in existing:
+            dup.append(c)
+        elif c["channel_id"] not in _seen_fresh:
+            _seen_fresh.add(c["channel_id"])
+            fresh.append(c)
     if dup:
         st.info(f"已在 Naver 库中跳过 {len(dup)} 人：" +
                 "、".join(d.get("channel_name", "") for d in dup[:5]))
@@ -3318,6 +3323,13 @@ def _on_nv_note_keystroke(cid: str):
 def _nv_render_candidates(cands: list, lo: int, hi: int, key_prefix: str) -> list:
     """渲染候选卡片：邻居数达标的可勾选；未获取的折叠展示；不达标的折叠隐藏。
     返回本次勾选的候选列表。"""
+    # 按 channel_id 去重：同一人出现两次会撞 checkbox key 使整页崩溃
+    _seen_ids, _uniq = set(), []
+    for _c in cands:
+        if _c.get("channel_id") not in _seen_ids:
+            _seen_ids.add(_c.get("channel_id"))
+            _uniq.append(_c)
+    cands = _uniq
     in_range, out_range, unknown = [], [], []
     for c in cands:
         if not c.get("neighbors_known"):
@@ -3392,7 +3404,7 @@ with tab_naver:
                     "没有 Key 也可以先用右边的「📋 手动名单」直接贴博客链接。")
         _nv_kw = st.text_input("韩语关键词", key="nv_kw",
                                placeholder="例：자취방 꾸미기 가성비 / 원룸 수납 / 리뷰 체험단 …")
-        if st.button("🔍 开始挖掘", key="nv_search_btn", type="primary", use_container_width=True):
+        if st.button("🔍 开始挖掘", key="nv_search_btn", use_container_width=True):
             if not naver_ready(_nv_id, _nv_secret):
                 st.warning("请先填 Naver Client ID / Secret（顶部 ⚙️ 筛选设置页）")
             elif not _nv_kw.strip():
@@ -3424,7 +3436,7 @@ with tab_naver:
                 st.info("这次没挖到候选：换个关键词试试（韩语垂类词+场景词效果更好）")
             _sel_all = _sel_b + _sel_c
             if st.button(f"🤖 AI 分析并加入网红库（已选 {_sel_all.__len__()} 人）",
-                         key="nv_add_mine", type="primary", use_container_width=True):
+                         key="nv_add_mine", use_container_width=True):
                 _nv_add_selected(_sel_all)
                 st.session_state.pop("nv_mine", None)
                 st.rerun()
@@ -3441,7 +3453,7 @@ with tab_naver:
         _nv_lines = st.text_area("名单", key="nv_manual_text", height=160,
                                  placeholder="https://blog.naver.com/xxxxx\n"
                                              "https://cafe.naver.com/clubname/123456\n정보소식통")
-        if st.button("🔍 补全数据", key="nv_manual_btn", type="primary", use_container_width=True):
+        if st.button("🔍 补全数据", key="nv_manual_btn", use_container_width=True):
             if not _nv_lines.strip():
                 st.warning("先粘贴名单")
             else:
@@ -3465,7 +3477,7 @@ with tab_naver:
             if _man["cands"]:
                 _sel_m = _nv_render_candidates(_man["cands"], _nv_lo, _nv_hi, "nvchk_m")
                 if st.button(f"🤖 AI 分析并加入网红库（已选 {_sel_m.__len__()} 人）",
-                             key="nv_add_manual", type="primary", use_container_width=True):
+                             key="nv_add_manual", use_container_width=True):
                     _nv_add_selected(_sel_m)
                     st.session_state.pop("nv_manual", None)
                     st.rerun()
@@ -3577,7 +3589,7 @@ with tab_naver:
                         st.warning(f"确定要把「{_name}」从 Naver 库移除吗？")
                         _d1, _d2, _ = st.columns([1, 1, 3])
                         with _d1:
-                            _sure = st.button("确定移除", key=f"nvdl_ok_{_cid}", type="primary",
+                            _sure = st.button("确定移除", key=f"nvdl_ok_{_cid}",
                                               use_container_width=True)
                         with _d2:
                             _no = st.button("取消", key=f"nvdl_no_{_cid}", use_container_width=True)

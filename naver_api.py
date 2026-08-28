@@ -431,7 +431,9 @@ def mine_by_keyword(keyword: str, client_id: str, client_secret: str, proxy: str
         _say(f"博客帖 {len(blog_posts)} 条，正在按博主聚合…")
         bloggers = {}
         for p in blog_posts:
-            home = p.get("bloggerlink", "")
+            home = (p.get("bloggerlink", "") or "").rstrip("/")
+            # 同一博主的 blog.naver.com 与 m.blog.naver.com 归一，避免聚成两人
+            home = re.sub(r"^https?://m\.blog\.naver\.com", "https://blog.naver.com", home)
             if not home:
                 continue
             b = bloggers.setdefault(home, {"name": p["bloggername"], "home": home,
