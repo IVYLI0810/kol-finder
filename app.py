@@ -906,6 +906,36 @@ CREATE POLICY "Allow all access" ON naver_influencers
   FOR ALL USING (true) WITH CHECK (true);"""
 
 
+def _nv_table_ready_cached() -> tuple[bool, bool]:
+    """探测 naver_influencers 表是否建好（带缓存，避免每次交互都查 Supabase——
+    公司网络下单次查询要 1-4 秒，不缓存会把整站拖卡）。
+    返回 (表可用?, 本次是否真的发了探测请求)。建好后永久记住；没建好时每 60 秒最多探一次。"""
+    ss = st.session_state
+    if ss.get("_nv_tbl_ready") is True:
+        return True, False
+    if time.time() - ss.get("_nv_tbl_probe_ts", 0) < 60:
+        return False, False
+    db = get_naver_db()
+    if not db:
+        return False, False  # 本地模式无表概念
+    ss["_nv_tbl_probe_ts"] = time.time()
+    ready, _err = db.table_ready()
+    ss["_nv_tbl_ready"] = ready
+    return ready, True
+
+
+def _get_nv_lib_records(force: bool = False) -> list:
+    """Naver 库记录（带缓存；增删改后由 _invalidate_lib_caches 清掉）"""
+    db = get_naver_db()
+    if not db:
+        return list(st.session_state.local_db_naver)
+    if not force and st.session_state.get("_nv_lib_cache") is not None:
+        return st.session_state["_nv_lib_cache"]
+    recs = db.get_all()
+    st.session_state["_nv_lib_cache"] = recs
+    return recs
+
+
 def _nv_table_guidance():
     """Naver 独立表还没建时的引导提示"""
     st.warning("⚠️ Naver 网红的数据表还没建（只需建一次，和 YouTube 库完全分开）")
@@ -918,7 +948,12 @@ def _nv_table_guidance():
 **3.** 把下面这段完整复制粘贴进去，点 **Run**
 """)
         st.code(NAVER_TABLE_SQL, language="sql")
-        st.markdown("看到绿色 **Success** 就好了。回到这个页面刷新一下即可使用。")
+        st.markdown("看到绿色 **Success** 就好了。")
+    if st.button("✅ 我建好表了，点这里刷新", key="nv_tbl_recheck"):
+        st.session_state.pop("_nv_tbl_ready", None)
+        st.session_state.pop("_nv_tbl_probe_ts", None)
+        st.session_state.pop("_nv_lib_cache", None)
+        st.rerun()
 
 
 def get_all_records() -> list[dict]:
@@ -1029,6 +1064,7 @@ def _invalidate_lib_caches():
     _get_paginated_records.clear()
     _get_dedup_records.clear()
     st.session_state.pop("_export_rows", None)
+    st.session_state.pop("_nv_lib_cache", None)
 
 
 # ============================================================
@@ -3191,7 +3227,7 @@ def _nv_add_selected(selected: list) -> None:
         return
     db = get_naver_db()
     if db:
-        ready, _err = db.table_ready()
+        ready, _err = _nv_table_ready_cached()
         if not ready:
             _nv_table_guidance()
             return
@@ -3325,10 +3361,9 @@ with tab_naver:
                 "邻居数（博客粉丝）只做门槛筛选、不影响评分；入库后进「Naver网红库」，和 YouTube 库完全分开。")
     st.markdown("")
 
-    # 独立表建好了吗？没建就先引导（只需建一次）
-    _ndb_probe = get_naver_db()
-    if _ndb_probe:
-        _tbl_ready, _tbl_err = _ndb_probe.table_ready()
+    # 独立表建好了吗？没建就先引导（只需建一次；探测结果有缓存，不会每次点击都查库）
+    if get_naver_db() is not None:
+        _tbl_ready, _ = _nv_table_ready_cached()
         if not _tbl_ready:
             _nv_table_guidance()
 
@@ -3446,9 +3481,9 @@ with tab_naver:
         _ndb = get_naver_db()
         _nv_records = None
         if _ndb:
-            _ready2, _err2 = _ndb.table_ready()
+            _ready2, _ = _nv_table_ready_cached()
             if _ready2:
-                _nv_records = _ndb.get_all()
+                _nv_records = _get_nv_lib_records()
             else:
                 _nv_table_guidance()
         else:
