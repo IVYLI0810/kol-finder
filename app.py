@@ -28,10 +28,11 @@ import threading as _threading
 import database as _database_mod
 import youtube_api as _youtube_mod
 import ai_analyzer as _ai_mod
+import naver_api as _naver_mod
 _reload_lock = getattr(_database_mod, "_hot_reload_lock", None) or _threading.Lock()
 _database_mod._hot_reload_lock = _reload_lock
 with _reload_lock:
-    for _m in (_database_mod, _youtube_mod, _ai_mod):
+    for _m in (_database_mod, _youtube_mod, _ai_mod, _naver_mod):
         try:
             _disk_mtime = _os.path.getmtime(_m.__file__)
         except OSError:
@@ -48,6 +49,8 @@ from youtube_api import (
 )
 from ai_analyzer import (analyze_channels, ai_ready, AI_CATEGORY_TABLE, CATEGORY_EN_MAP, DASHSCOPE_MODEL,
                          CONTENT_CATEGORY_TABLE, generate_keywords, generate_bd_email_ai)
+from naver_api import (naver_ready, mine_by_keyword, resolve_manual_list, naver_scores,
+                       refresh_naver_record, get_blog_stats, parse_blog_id)
 
 
 def _cat_export_label(cat) -> str:
@@ -619,12 +622,50 @@ def _enrich_with_ai(results: list, status_box=None) -> str:
     return note
 
 
+def _refresh_naver_channel(channel_id: str, channel_name: str, owner: str = "") -> tuple[bool, str]:
+    """刷新 Naver 网红（NV 开头）：重新查博客邻居数。邻居数只是门槛，不进评分。"""
+    user_name = st.session_state.get("user_name", "")
+    if owner and owner != user_name:
+        return False, f"只能刷新自己挖掘的网红（{channel_name} 由 {owner} 负责）"
+    _db = get_naver_db()
+    rec = None
+    if _db:
+        rec = _db.get_record(channel_id)
+    else:
+        for lr in st.session_state.local_db_naver:
+            if lr.get("channel_id") == channel_id:
+                rec = lr
+                break
+    if not rec:
+        return False, f"⚠️ {channel_name}：库里找不到这条记录"
+    with st.spinner(f"刷新 {channel_name} 中..."):
+        stats = refresh_naver_record(rec, proxy=st.session_state.get("naver_proxy", ""))
+    if not stats:
+        return False, f"⚠️ {channel_name}：博客主页暂时打不开，没刷新到（不影响库里数据）"
+    new_data = {
+        "subscribers": stats["neighbors"],
+        "avg_views_30d": rec.get("avg_views_30d", 0),
+        "view_sub_ratio": rec.get("view_sub_ratio", 0),
+        "last_upload": rec.get("last_upload", ""),
+        "scores": {"total": rec.get("score_total", 0)},
+    }
+    if _db:
+        _db.update_last_checked(channel_id, True, new_data)
+    else:
+        rec["subscribers"] = stats["neighbors"]
+        rec["last_checked"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _invalidate_lib_caches()
+    return True, f"✅ {channel_name}：邻居数已更新为 {stats['neighbors']:,}"
+
+
 def _refresh_one_channel(channel_id: str, channel_name: str, category: str, owner: str = "") -> tuple[bool, str]:
     """刷新单个网红的基础数据（订阅/均播/评分/最近更新）。
 
     返回 (成功?, 提示消息)。成功时会更新数据库并清空相关缓存。
     只有该网红的挖掘人（discovered_by）与当前登录用户一致时才允许刷新。
     """
+    if str(channel_id).startswith("NV"):
+        return _refresh_naver_channel(channel_id, channel_name, owner)
     user_name = st.session_state.get("user_name", "")
     if owner and owner != user_name:
         return False, f"只能刷新自己挖掘的网红（{channel_name} 由 {owner} 负责）"
@@ -722,12 +763,22 @@ def _clear_batch_selection():
 
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
+if "naver_id" not in st.session_state:
+    st.session_state.naver_id = ""
+if "naver_secret" not in st.session_state:
+    st.session_state.naver_secret = ""
+if "naver_proxy" not in st.session_state:
+    st.session_state.naver_proxy = ""
 if "supabase_url" not in st.session_state:
     st.session_state.supabase_url = SUPABASE_URL
 if "supabase_key" not in st.session_state:
     st.session_state.supabase_key = SUPABASE_KEY
 if "db" not in st.session_state:
     st.session_state.db = None  # InfluencerDB 实例
+if "naver_db" not in st.session_state:
+    st.session_state.naver_db = None  # NaverInfluencerDB 实例（独立表 naver_influencers）
+if "local_db_naver" not in st.session_state:
+    st.session_state.local_db_naver = []  # 本地模式下的 Naver 网红测试数据
 if "quota" not in st.session_state:
     st.session_state.quota = QuotaTracker()
 if "search_results" not in st.session_state:
@@ -800,6 +851,74 @@ def get_db():
         except Exception:
             return None
     return None
+
+
+def get_naver_db():
+    """获取 Naver 网红独立表实例（naver_influencers，与 YouTube 的 influencers 分开）"""
+    if st.session_state.supabase_key == "PASTE_YOUR_ANON_KEY_HERE":
+        return None
+    if st.session_state.supabase_url and st.session_state.supabase_key:
+        try:
+            from database import NaverInfluencerDB
+            if st.session_state.naver_db is None:
+                st.session_state.naver_db = NaverInfluencerDB(
+                    st.session_state.supabase_url, st.session_state.supabase_key
+                )
+            return st.session_state.naver_db
+        except Exception:
+            return None
+    return None
+
+
+# Naver 独立表建表语句（在 Supabase SQL Editor 里粘贴运行一次即可）
+NAVER_TABLE_SQL = """CREATE TABLE naver_influencers (
+  id BIGSERIAL PRIMARY KEY,
+  channel_id TEXT UNIQUE NOT NULL,
+  channel_name TEXT DEFAULT '',
+  channel_url TEXT DEFAULT '',
+  about_url TEXT DEFAULT '',
+  category TEXT DEFAULT '',
+  content_category TEXT DEFAULT '',
+  subscribers INTEGER DEFAULT 0,
+  avg_views_30d INTEGER DEFAULT 0,
+  view_sub_ratio REAL DEFAULT 0,
+  last_upload TEXT DEFAULT '',
+  score_total INTEGER DEFAULT 0,
+  score_detail TEXT DEFAULT '',
+  emails TEXT DEFAULT '',
+  has_commercial BOOLEAN DEFAULT FALSE,
+  commercial_evidence TEXT DEFAULT '',
+  recent_titles TEXT DEFAULT '',
+  thumbnails TEXT DEFAULT '',
+  status TEXT DEFAULT '新发现',
+  status_date TEXT DEFAULT '',
+  discovered_by TEXT DEFAULT '',
+  email_sent_date TEXT,
+  introduced_date TEXT,
+  notes TEXT DEFAULT '',
+  added_date TEXT DEFAULT '',
+  last_checked TEXT DEFAULT ''
+);
+
+ALTER TABLE naver_influencers ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all access" ON naver_influencers
+  FOR ALL USING (true) WITH CHECK (true);"""
+
+
+def _nv_table_guidance():
+    """Naver 独立表还没建时的引导提示"""
+    st.warning("⚠️ Naver 网红的数据表还没建（只需建一次，和 YouTube 库完全分开）")
+    with st.expander("📖 点我看建表步骤（2 分钟）"):
+        st.markdown("""
+**1.** 打开 Supabase（supabase.com）→ 进入 kol-finder 项目
+
+**2.** 左侧找到 **SQL Editor**（和当初建 influencers 表同一个地方）
+
+**3.** 把下面这段完整复制粘贴进去，点 **Run**
+""")
+        st.code(NAVER_TABLE_SQL, language="sql")
+        st.markdown("看到绿色 **Success** 就好了。回到这个页面刷新一下即可使用。")
 
 
 def get_all_records() -> list[dict]:
@@ -1491,6 +1610,72 @@ with st.sidebar:
 **5.** 复制密钥粘贴到上面输入框即可（免费 10,000 units/天，够全队用）
 """)
 
+    # ---------- Naver API：Cafe/博客挖掘用（记住在自己浏览器） ----------
+    st.markdown("")
+    st.markdown("#### 🟢 Naver API（Cafe/博客挖掘用）")
+
+    _ls_nv = LocalStorage(key="nv_key_store")
+    if not st.session_state.naver_id:
+        st.session_state.naver_id = _ls_nv.getItem("nv_client_id") or ""
+    if not st.session_state.naver_secret:
+        st.session_state.naver_secret = _ls_nv.getItem("nv_client_secret") or ""
+    if not st.session_state.naver_proxy:
+        st.session_state.naver_proxy = _ls_nv.getItem("nv_proxy") or ""
+
+    _nv_id_in = st.text_input(
+        "Client ID", value=st.session_state.naver_id, type="password",
+        key="nv_id_input", placeholder="粘贴 Naver Client ID",
+        help="developers.naver.com 免费申请，「Cafe/博客挖掘」tab 用")
+    _nv_secret_in = st.text_input(
+        "Client Secret", value=st.session_state.naver_secret, type="password",
+        key="nv_secret_input", placeholder="粘贴 Naver Client Secret")
+    if _nv_id_in != st.session_state.naver_id:
+        st.session_state.naver_id = _nv_id_in
+    if _nv_secret_in != st.session_state.naver_secret:
+        st.session_state.naver_secret = _nv_secret_in
+
+    _nv_proxy_in = st.text_input(
+        "代理（可选，一般留空）", value=st.session_state.naver_proxy,
+        key="nv_proxy_input", placeholder="例：socks5h://127.0.0.1:13659",
+        help="只有公司网络打不开 Naver 时才需要填；线上网站直接能连，留空即可")
+    if _nv_proxy_in != st.session_state.naver_proxy:
+        st.session_state.naver_proxy = _nv_proxy_in
+
+    _cn_remember, _cn_forget = st.columns([1, 1])
+    with _cn_remember:
+        if st.button("记住", key="nv_remember_key", use_container_width=True,
+                     help="存进你自己电脑的浏览器，刷新不用重填。不上传服务器。"):
+            if _nv_id_in.strip() and _nv_secret_in.strip():
+                _ls_nv.setItem("nv_client_id", _nv_id_in.strip(), key="nv_do_remember1")
+                _ls_nv.setItem("nv_client_secret", _nv_secret_in.strip(), key="nv_do_remember2")
+                _ls_nv.setItem("nv_proxy", _nv_proxy_in.strip(), key="nv_do_remember3")
+                st.success("✅ 已记住，以后刷新自动填好")
+            else:
+                st.warning("先把 Client ID 和 Secret 都粘贴好再点记住哦")
+    with _cn_forget:
+        if st.button("忘掉", key="nv_forget_key", use_container_width=True):
+            _ls_nv.deleteItem("nv_client_id", key="nv_do_forget1")
+            _ls_nv.deleteItem("nv_client_secret", key="nv_do_forget2")
+            _ls_nv.deleteItem("nv_proxy", key="nv_do_forget3")
+            st.session_state.naver_id = ""
+            st.session_state.naver_secret = ""
+            st.session_state.naver_proxy = ""
+            st.warning("已忘掉，下次要重新粘贴")
+    st.caption("🔒 Key 只存在你自己浏览器，不上传服务器 · 免费 25,000 次/天")
+
+    with st.expander("📖 如何申请 Naver Key？（免费，点我看步骤）"):
+        st.markdown("""
+**1.** 打开 **developers.naver.com**，用你的 Naver 账号登录
+
+**2.** 顶部菜单点「**API 활용**」→「**애플리케이션 등록**」（应用注册）
+
+**3.** 应用名随便填（比如 `kolfinder`），其他保持默认，点注册
+
+**4.** 注册好后页面会显示 **Client ID** 和 **Client Secret**，分别粘贴到上面两个框
+
+**5.** 点「记住」即可（免费每天 25,000 次搜索，全队够用）
+""")
+
     # ---------- 公共库：已写死在代码里，只显示状态 ----------
     st.markdown("")
     st.markdown("#### 🗄 团队公共库")
@@ -1553,13 +1738,13 @@ st.markdown("""
     <span class="hero-star hero-star-5">✦</span>
     <div class="hero-logo">✦</div>
     <div class="hero-title">KOL Finder</div>
-    <div class="hero-sub">韩国 YouTube 网红挖掘 · 自动验证活跃 · 智能评分 · 公共库去重</div>
+    <div class="hero-sub">韩国 YouTube & Naver 网红挖掘 · 自动验证活跃 · 智能评分 · 公共库去重</div>
 </div>
 """, unsafe_allow_html=True)
 st.markdown("")
 
-tab_search, tab_database, tab_import, tab_settings = st.tabs([
-    "🔎 搜索挖掘", "📁 网红库", "📥 批量导入", "⚙️ 筛选设置"
+tab_search, tab_naver, tab_database, tab_import, tab_settings = st.tabs([
+    "🔎 搜索挖掘", "☕ Naver挖掘", "📁 网红库", "📥 批量导入", "⚙️ 筛选设置"
 ])
 
 # ============================================================
@@ -2571,6 +2756,13 @@ def _library_fragment():
 
                             status_date_html = _status_date_html(status, rec.get("email_sent_date"), rec.get("introduced_date"), rec.get("status_date"))
 
+                            # Naver 网红（NV 开头）：平台标 + 邻居数口径
+                            _is_nv = _cid.startswith("NV")
+                            _nv_chip = ('<span class="cat-tag" style="background:#ffe3ec;color:#c2416b;">☕ Naver</span>'
+                                        if _is_nv else '')
+                            _stats_line = (f"👥 {subs:,} 邻居 · ⭐ 相关度 {score}" if _is_nv
+                                           else f"📺 {subs:,} 订阅 · ⭐ 评分 {score}")
+
                             # 卡片信息（紧凑版）
                             _render_html(f"""
                             <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
@@ -2579,11 +2771,12 @@ def _library_fragment():
                             </div>
                             <div class="kol-tags">
                                 <span class="status-tag {status_class}">{status}</span>
+                                {_nv_chip}
                                 <span class="cat-tag" title="内容垂类：频道在拍什么">🎬 {_safe(ccat) if ccat else '—'}</span>
                                 <span class="cat-tag" title="带货垂类：适合挂哪类商品链接">🛍 {_safe(cat)}</span>
                             </div>
                             {status_date_html}
-                            <div class="kol-stats">📺 {subs:,} 订阅 · ⭐ 评分 {score}</div>
+                            <div class="kol-stats">{_stats_line}</div>
                             <div class="kol-sub">👤 挖掘人：{_safe(discoverer) if discoverer else '—'}</div>
                             <div class="kol-email">📧 <span class="email-chip">{_safe(email) if email else '未公开'}</span></div>
                             <hr class="kol-divider">
@@ -2602,16 +2795,19 @@ def _library_fragment():
                             )
 
                             # 刷新 / 删除 / 备注
-                            c_rc, c_rm, c_nt = st.columns([1, 1, 4])
+                            c_rc, c_rm, c_nt = st.columns([1.5, 1.5, 4])
                             with c_rc:
                                 is_owner = discoverer == st.session_state.get("user_name", "")
                                 if is_owner:
-                                    do_refresh = st.button("🔄", key=f"rc_{idx}", help="刷新数据", type="primary")
+                                    do_refresh = st.button("🔄 刷新", key=f"rc_{idx}", help="刷新数据",
+                                                           use_container_width=True)
                                 else:
-                                    st.button("🔄", key=f"rc_{idx}", help="只能刷新自己挖掘的网红", disabled=True)
+                                    st.button("🔄 刷新", key=f"rc_{idx}", help="只能刷新自己挖掘的网红",
+                                              disabled=True, use_container_width=True)
                                     do_refresh = False
                             with c_rm:
-                                do_remove = st.button("🗑", key=f"rm_{idx}", help="从库中移除", type="primary")
+                                do_remove = st.button("🗑 移除", key=f"rm_{idx}", help="从库中移除",
+                                                      use_container_width=True)
                             with c_nt:
                                 st.session_state.setdefault(f"ntbase_{_cid}", notes)
                                 st.text_input("备注", value=notes, key=f"nt_{_cid}",
@@ -2659,9 +2855,14 @@ def _library_fragment():
                     with r0:
                         st.checkbox("选", key=f"bchk_{_cid}", on_change=_on_batch_check, args=(_cid,),
                                     label_visibility="collapsed", help="勾选后可批量操作")
+                    # Naver 网红（NV 开头）：平台标 + 邻居数口径
+                    _is_nv_l = _cid.startswith("NV")
+                    _nv_chip_l = ('<span class="cat-tag" style="background:#ffe3ec;color:#c2416b;">☕ Naver</span> '
+                                  if _is_nv_l else '')
+                    _subs_icon = "👥" if _is_nv_l else "📺"
                     with r1:
                         _render_html(
-                            f'<span class="row-name"><a href="{url}" target="_blank">{_safe(name)}</a></span><br>'
+                            f'<span class="row-name"><a href="{url}" target="_blank">{_safe(name)}</a></span> {_nv_chip_l}<br>'
                             f'<span class="row-email">📧 {_safe(email) if email else "未公开"}</span>'
                         )
                     with r2:
@@ -2670,7 +2871,7 @@ def _library_fragment():
                             f'<span class="cat-tag row-cat" title="带货垂类：适合挂哪类商品链接">🛍 {_safe(cat)}</span>'
                         )
                     with r3:
-                        _render_html(f'<span class="row-num">📺 {subs:,}</span>')
+                        _render_html(f'<span class="row-num">{_subs_icon} {subs:,}</span>')
                     with r4:
                         _render_html(f'<span class="row-num">⭐ {score}</span>')
                     with r5:
@@ -2689,16 +2890,19 @@ def _library_fragment():
                     with r6:
                         _render_html(f'<span class="row-who">👤 {_safe(discoverer) if discoverer else "—"}</span>')
                     with r7:
-                        a_rc, a_rm, a_ml = st.columns([1, 1, 2.4])
+                        a_rc, a_rm, a_ml = st.columns([1.3, 1.3, 2.2])
                         with a_rc:
                             is_owner = discoverer == st.session_state.get("user_name", "")
                             if is_owner:
-                                do_refresh = st.button("🔄", key=f"lrc_{idx}", help="刷新数据", type="primary")
+                                do_refresh = st.button("🔄 刷新", key=f"lrc_{idx}", help="刷新数据",
+                                                       use_container_width=True)
                             else:
-                                st.button("🔄", key=f"lrc_{idx}", help="只能刷新自己挖掘的网红", disabled=True)
+                                st.button("🔄 刷新", key=f"lrc_{idx}", help="只能刷新自己挖掘的网红",
+                                          disabled=True, use_container_width=True)
                                 do_refresh = False
                         with a_rm:
-                            do_remove = st.button("🗑", key=f"lrm_{idx}", help="从库中移除", type="primary")
+                            do_remove = st.button("🗑 移除", key=f"lrm_{idx}", help="从库中移除",
+                                                  use_container_width=True)
                         with a_ml:
                             do_mail = st.button("📧 邮件", key=f"lmail_{idx}", use_container_width=True)
                         if do_mail:
@@ -2930,6 +3134,431 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
                     except Exception as _e:
                         _bar.progress(1.0, text="补全中断")
                         st.error(f"补全出错：{type(_e).__name__}: {_e}（已补的不会丢，可再点一次继续）")
+
+
+# ============================================================
+# Tab: Naver 挖掘（Cafe / 博客）
+# ============================================================
+
+def _nv_card_html(c: dict) -> str:
+    """Naver 候选卡片：平台标 + 邻居数（门槛参考）+ 活跃 cafe/帖子 + 博客链接"""
+    is_cafe = c.get("platform") == "naver_cafe"
+    plat = "☕ Cafe活跃" if is_cafe else "📝 博客"
+    nb = c.get("subscribers", 0)
+    nb_html = (f"<b>{nb:,}</b> 邻居" if c.get("neighbors_known")
+               else "<span style='color:#b98a9b;'>邻居数未获取</span>")
+    cafes = "、".join(c.get("cafe_names", [])) if is_cafe else ""
+    titles = " / ".join((c.get("recent_titles") or [])[:2])
+    blog_line = ""
+    if c.get("blog_home"):
+        blog_line = (f"<div class='kol-sub'>📝 博客：<a href='{c['blog_home']}' "
+                     f"target='_blank'>{c['blog_home']}</a></div>")
+    cafe_line = f"<div class='kol-sub'>☕ 活跃于：{_safe(cafes)}</div>" if cafes else ""
+    cnt = c.get("post_count", 0)
+    cnt_line = f"<div class='kol-sub'>📄 相关帖子 {cnt} 条</div>" if cnt else ""
+    return f"""
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+        <span class="kol-name">{_safe(c.get('channel_name', '') or '（无昵称）')}</span>
+        <a class="kol-home" href="{c.get('channel_url', '#')}" target="_blank">主页 ↗</a>
+    </div>
+    <div class="kol-tags">
+        <span class="cat-tag" style="background:#ffe3ec;color:#c2416b;">{plat}</span>
+        <span class="cat-tag">👥 {nb_html}</span>
+    </div>
+    {cafe_line}
+    {cnt_line}
+    {blog_line}
+    <div class="kol-sub" style="color:#9c7b88;">{_safe(titles[:120]) if titles else ''}</div>
+    <hr class="kol-divider">
+    """
+
+
+def _nv_existing_ids() -> set:
+    """Naver 独立表里已有的 channel_id（去重用，和 YouTube 库互不相干）"""
+    db = get_naver_db()
+    if db:
+        try:
+            return db.get_channel_ids()
+        except Exception:
+            return set()
+    return {r.get("channel_id", "") for r in st.session_state.local_db_naver}
+
+
+def _nv_add_selected(selected: list) -> None:
+    """AI 定垂类 → 去重 → 入 Naver 独立表。邻居数只是门槛不进评分，总分取 AI 相关度。"""
+    if not selected:
+        st.warning("先勾选要添加的候选")
+        return
+    db = get_naver_db()
+    if db:
+        ready, _err = db.table_ready()
+        if not ready:
+            _nv_table_guidance()
+            return
+    existing = _nv_existing_ids()
+    fresh, dup = [], []
+    for c in selected:
+        (dup if c["channel_id"] in existing else fresh).append(c)
+    if dup:
+        st.info(f"已在 Naver 库中跳过 {len(dup)} 人：" +
+                "、".join(d.get("channel_name", "") for d in dup[:5]))
+    if not fresh:
+        return
+    box = st.empty()
+    box.info("🤖 AI 正在定垂类、打相关度…")
+    try:
+        analyze_channels(fresh, status_cb=lambda m: box.info(f"🔍 {m}"))
+    except Exception as e:
+        box.warning(f"AI 分析失败（{e}），按中性值处理")
+    box.empty()
+    user_name = st.session_state.get("user_name", "")
+    ok_n, fail_n = 0, 0
+    for c in fresh:
+        if c.get("ai_category"):
+            c["category"] = c["ai_category"]
+        c["scores"] = naver_scores(c.get("ai_relevance", 50))
+        if db:
+            if db.add_influencer(c, discovered_by=user_name):
+                ok_n += 1
+            else:
+                fail_n += 1
+        else:
+            c2 = dict(c)
+            c2["status"] = "新发现"
+            c2["added_date"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            c2["discovered_by"] = user_name
+            c2["score_total"] = c["scores"]["total"]
+            st.session_state.local_db_naver.append(c2)
+            ok_n += 1
+    _invalidate_lib_caches()
+    if db:
+        st.success(f"✅ 已加入 Naver 网红库 {ok_n} 人" + (f"，失败 {fail_n} 人" if fail_n else ""))
+    else:
+        st.success(f"✅ 已加入 {ok_n} 人（本地模式）")
+    for c in fresh:
+        for pf in ("nvchk_a_", "nvchk_b_", "nvchk_m_"):
+            st.session_state.pop(pf + c["channel_id"], None)
+
+
+def _apply_nv_status_change(rec: dict, new_status: str) -> bool:
+    """Naver 库的状态变更（写 naver_influencers，不碰 YouTube 库）"""
+    cid = rec.get("channel_id", "")
+    db = get_naver_db()
+    if db:
+        return db.update_status(cid, new_status)
+    for lr in st.session_state.local_db_naver:
+        if lr.get("channel_id") == cid:
+            _apply_status_date(lr, new_status)
+            return True
+    return False
+
+
+def _on_nv_status_change(cid: str, rec: dict, widget_key: str):
+    """Naver 库状态下拉的 on_change 回调"""
+    val = st.session_state.get(widget_key)
+    if not val or val == rec.get("status", "新发现"):
+        return
+    ok = _apply_nv_status_change(rec, val)
+    _name = rec.get("channel_name", "")
+    if ok:
+        st.session_state["_nv_status_msg"] = f"✅ 「{_name}」已改为 {val}"
+    else:
+        st.session_state["_nv_status_msg"] = f"⚠️ 「{_name}」没改成，刷新页面重试"
+
+
+def _on_nv_note_keystroke(cid: str):
+    """Naver 库备注输入即保存"""
+    db = get_naver_db()
+    val = st.session_state.get(f"nvnt_{cid}", "")
+    if db:
+        db.update_notes(cid, val)
+    else:
+        for lr in st.session_state.local_db_naver:
+            if lr.get("channel_id") == cid:
+                lr["notes"] = val
+                break
+
+
+def _nv_render_candidates(cands: list, lo: int, hi: int, key_prefix: str) -> list:
+    """渲染候选卡片：邻居数达标的可勾选；未获取的折叠展示；不达标的折叠隐藏。
+    返回本次勾选的候选列表。"""
+    in_range, out_range, unknown = [], [], []
+    for c in cands:
+        if not c.get("neighbors_known"):
+            unknown.append(c)
+        elif lo <= c.get("subscribers", 0) <= hi:
+            in_range.append(c)
+        else:
+            out_range.append(c)
+    selected = []
+    if in_range:
+        st.markdown(f"**✅ 邻居数达标（{lo:,}–{hi:,}）· {len(in_range)} 人**")
+        for c in in_range:
+            c1, c2 = st.columns([0.4, 9.6])
+            with c1:
+                if st.checkbox("选", key=f"{key_prefix}_{c['channel_id']}",
+                               label_visibility="collapsed",
+                               help="勾选后点下方按钮入库"):
+                    selected.append(c)
+            with c2:
+                _render_html(_nv_card_html(c))
+    if unknown:
+        with st.expander(f"🔘 邻居数未获取 · {len(unknown)} 人（也可勾选，入库按内容判断）"):
+            for c in unknown:
+                c1, c2 = st.columns([0.4, 9.6])
+                with c1:
+                    if st.checkbox("选", key=f"{key_prefix}_{c['channel_id']}",
+                                   label_visibility="collapsed"):
+                        selected.append(c)
+                with c2:
+                    _render_html(_nv_card_html(c))
+    if out_range:
+        with st.expander(f"🚫 邻居数不在门槛内 · {len(out_range)} 人（点开查看）"):
+            for c in out_range:
+                _render_html(_nv_card_html(c))
+    return selected
+
+
+with tab_naver:
+    st.markdown("### 挖掘 Naver Cafe / 博客网红")
+    st.markdown("两条路：**关键词自动挖掘**（需 Naver Key）和 **手动名单**（直接贴博客链接，不需 Key）。"
+                "邻居数（博客粉丝）只做门槛筛选、不影响评分；入库后进「Naver网红库」，和 YouTube 库完全分开。")
+    st.markdown("")
+
+    # 独立表建好了吗？没建就先引导（只需建一次）
+    _ndb_probe = get_naver_db()
+    if _ndb_probe:
+        _tbl_ready, _tbl_err = _ndb_probe.table_ready()
+        if not _tbl_ready:
+            _nv_table_guidance()
+
+    # 邻居数门槛：数字区间（只筛选、不打分）
+    _nc1, _nc2, _nc3 = st.columns([1, 1, 2.5])
+    with _nc1:
+        _nv_lo = st.number_input("👥 邻居数下限", 0, 1000000, 3000, step=500,
+                                 key="nv_lo_input", help="博客粉丝数低于这个值的不显示，不参与评分")
+    with _nc2:
+        _nv_hi = st.number_input("👥 邻居数上限", 0, 1000000, 50000, step=500,
+                                 key="nv_hi_input", help="博客粉丝数高于这个值的不显示（太大请不起）")
+    with _nc3:
+        st.caption("邻居数门槛：只用来筛选、不参与评分，随时可改")
+    if _nv_lo > _nv_hi:
+        _nv_lo, _nv_hi = _nv_hi, _nv_lo
+
+    _nv_id = st.session_state.get("naver_id", "").strip()
+    _nv_secret = st.session_state.get("naver_secret", "").strip()
+    _nv_proxy = st.session_state.get("naver_proxy", "").strip()
+
+    nv_tab_a, nv_tab_b, nv_tab_lib = st.tabs(["🔎 关键词挖掘", "📋 手动名单", "📁 Naver网红库"])
+
+    with nv_tab_a:
+        if not naver_ready(_nv_id, _nv_secret):
+            st.info("👈 关键词挖掘需要 Naver API Key：在「⚙️ 筛选设置」页填入（附免费申请步骤）。"
+                    "没有 Key 也可以先用右边的「📋 手动名单」直接贴博客链接。")
+        _nv_kw = st.text_input("韩语关键词", key="nv_kw",
+                               placeholder="例：자취방 꾸미기 가성비 / 원룸 수납 / 리뷰 체험단 …")
+        if st.button("🔍 开始挖掘", key="nv_search_btn", type="primary", use_container_width=True):
+            if not naver_ready(_nv_id, _nv_secret):
+                st.warning("请先填 Naver Client ID / Secret（顶部 ⚙️ 筛选设置页）")
+            elif not _nv_kw.strip():
+                st.warning("先输入关键词")
+            else:
+                _box = st.empty()
+                with st.spinner("挖掘中：搜帖子 → 识别发帖人 → 查邻居数…"):
+                    try:
+                        _res = mine_by_keyword(_nv_kw.strip(), _nv_id, _nv_secret,
+                                               proxy=_nv_proxy,
+                                               progress_cb=lambda m: _box.info(f"🔍 {m}"))
+                        st.session_state.nv_mine = _res
+                        st.session_state.nv_mine_kw = _nv_kw.strip()
+                    except Exception as _e:
+                        st.error(f"挖掘出错：{type(_e).__name__}: {_e}")
+                _box.empty()
+
+        _res = st.session_state.get("nv_mine")
+        if _res:
+            for _e in _res.get("errors", []):
+                st.warning(_e)
+            _bc = _res.get("blogger_candidates", [])
+            _cc = _res.get("cafe_candidates", [])
+            st.markdown(f"关键词「{st.session_state.get('nv_mine_kw', '')}」：挖到 "
+                        f"**{len(_bc)} 位博主**（带邻居数）+ **{len(_cc)} 位 cafe 活跃成员**")
+            _sel_b = _nv_render_candidates(_bc, _nv_lo, _nv_hi, "nvchk_a") if _bc else []
+            _sel_c = _nv_render_candidates(_cc, _nv_lo, _nv_hi, "nvchk_b") if _cc else []
+            if not _bc and not _cc:
+                st.info("这次没挖到候选：换个关键词试试（韩语垂类词+场景词效果更好）")
+            _sel_all = _sel_b + _sel_c
+            if st.button(f"🤖 AI 分析并加入网红库（已选 {_sel_all.__len__()} 人）",
+                         key="nv_add_mine", type="primary", use_container_width=True):
+                _nv_add_selected(_sel_all)
+                st.session_state.pop("nv_mine", None)
+                st.rerun()
+            _posts = _res.get("cafe_posts", [])
+            if _posts:
+                with st.expander(f"🔗 本次 cafe 帖子清单（{_posts.__len__()} 条，点开可在浏览器手动查看）"):
+                    st.markdown("\n".join(
+                        f"- [{_safe(p['title'][:60])}]({p['link']}) · {_safe(p['cafename'])}"
+                        for p in _posts[:60]))
+
+    with nv_tab_b:
+        st.markdown("每行一个：**博客链接**（最准，不需 Key）/ **cafe 帖子链接**（自动识别发帖人）/ "
+                    "**昵称**（需要 Naver Key 才能帮她找博客）")
+        _nv_lines = st.text_area("名单", key="nv_manual_text", height=160,
+                                 placeholder="https://blog.naver.com/xxxxx\n"
+                                             "https://cafe.naver.com/clubname/123456\n정보소식통")
+        if st.button("🔍 补全数据", key="nv_manual_btn", type="primary", use_container_width=True):
+            if not _nv_lines.strip():
+                st.warning("先粘贴名单")
+            else:
+                _box2 = st.empty()
+                with st.spinner("补全中：找博客 → 查邻居数…"):
+                    try:
+                        _cands, _failed = resolve_manual_list(
+                            _nv_lines, _nv_id, _nv_secret, proxy=_nv_proxy,
+                            progress_cb=lambda m: _box2.info(f"🔍 {m}"))
+                        st.session_state.nv_manual = {"cands": _cands, "failed": _failed}
+                    except Exception as _e:
+                        st.error(f"补全出错：{type(_e).__name__}: {_e}")
+                _box2.empty()
+
+        _man = st.session_state.get("nv_manual")
+        if _man:
+            if _man["failed"]:
+                with st.expander(f"⚠️ {_man['failed'].__len__()} 条没补全（点开看原因）"):
+                    for _f in _man["failed"]:
+                        st.text(f"{_f['line'][:50]} — {_f['reason']}")
+            if _man["cands"]:
+                _sel_m = _nv_render_candidates(_man["cands"], _nv_lo, _nv_hi, "nvchk_m")
+                if st.button(f"🤖 AI 分析并加入网红库（已选 {_sel_m.__len__()} 人）",
+                             key="nv_add_manual", type="primary", use_container_width=True):
+                    _nv_add_selected(_sel_m)
+                    st.session_state.pop("nv_manual", None)
+                    st.rerun()
+            elif not _man["failed"]:
+                st.info("没有可补全的候选")
+
+    with nv_tab_lib:
+        # 状态变更提示（上一轮操作留下的）
+        _nv_msg = st.session_state.pop("_nv_status_msg", None)
+        if _nv_msg:
+            (st.success if _nv_msg.startswith("✅") else st.warning)(_nv_msg)
+
+        _ndb = get_naver_db()
+        _nv_records = None
+        if _ndb:
+            _ready2, _err2 = _ndb.table_ready()
+            if _ready2:
+                _nv_records = _ndb.get_all()
+            else:
+                _nv_table_guidance()
+        else:
+            _nv_records = list(st.session_state.local_db_naver)
+
+        if _nv_records is not None:
+            if not _nv_records:
+                st.info("Naver 库还是空的——去「🔎 关键词挖掘」或「📋 手动名单」加几个人吧")
+            else:
+                _n_total = len(_nv_records)
+                _n_by_status = {}
+                for _r in _nv_records:
+                    _n_by_status[_r.get("status", "新发现")] = _n_by_status.get(_r.get("status", "新发现"), 0) + 1
+                _summary = " · ".join(f"{k} {v}" for k, v in _n_by_status.items())
+                st.markdown(f"**共 {_n_total} 人** · {_summary}")
+                st.markdown("")
+
+            for _idx, _rec in enumerate(_nv_records):
+                with st.container():
+                    _cid = _rec.get("channel_id", "")
+                    _name = _rec.get("channel_name", "未知")
+                    _url = _rec.get("channel_url", "#")
+                    _subs = _rec.get("subscribers") or 0
+                    _cat = _rec.get("category", "")
+                    _ccat = _rec.get("content_category", "")
+                    _status = _rec.get("status", "新发现")
+                    _notes = _rec.get("notes", "")
+                    _who = _rec.get("discovered_by", "")
+                    _status_class = {"新发现": "status-new", "已发邮件": "status-emailed",
+                                     "已引入": "status-onboard", "已拒绝": "status-reject",
+                                     "已淘汰": "status-elim"}.get(_status, "status-new")
+
+                    _render_html(f"""
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                        <span class="kol-name">{_safe(_name)}</span>
+                        <a class="kol-home" href="{_url}" target="_blank">主页 ↗</a>
+                    </div>
+                    <div class="kol-tags">
+                        <span class="status-tag {_status_class}">{_status}</span>
+                        <span class="cat-tag" style="background:#ffe3ec;color:#c2416b;">☕ Naver</span>
+                        <span class="cat-tag">👥 {_subs:,} 邻居</span>
+                        <span class="cat-tag" title="内容垂类">🎬 {_safe(_ccat) if _ccat else '—'}</span>
+                        <span class="cat-tag" title="带货垂类">🛍 {_safe(_cat)}</span>
+                    </div>
+                    <div class="kol-sub">👤 挖掘人：{_safe(_who) if _who else '—'}</div>
+                    <hr class="kol-divider">
+                    """)
+
+                    _c1, _c2, _c3 = st.columns([1.2, 2.4, 2.6])
+                    with _c1:
+                        _NV_ST_OPTS = ["新发现", "已发邮件", "已引入", "已拒绝", "已淘汰"]
+                        st.session_state[f"nvst_{_cid}"] = _status
+                        st.selectbox("状态", _NV_ST_OPTS,
+                                     index=_NV_ST_OPTS.index(_status) if _status in _NV_ST_OPTS else 0,
+                                     key=f"nvst_{_cid}", label_visibility="collapsed",
+                                     on_change=_on_nv_status_change, args=(_cid, _rec, f"nvst_{_cid}"))
+                    with _c2:
+                        st.text_input("备注", value=_notes, key=f"nvnt_{_cid}",
+                                      placeholder="例：已发邮件、回复快...",
+                                      label_visibility="collapsed",
+                                      on_change=_on_nv_note_keystroke, args=(_cid,))
+                    with _c3:
+                        _b1, _b2, _b3 = st.columns(3)
+                        with _b1:
+                            _is_owner_nv = _who == st.session_state.get("user_name", "")
+                            if _is_owner_nv or not _who:
+                                _do_nv_refresh = st.button("🔄 刷新", key=f"nvrf_{_cid}",
+                                                           use_container_width=True, help="重新查邻居数")
+                            else:
+                                st.button("🔄 刷新", key=f"nvrf_{_cid}", use_container_width=True,
+                                          help="只能刷新自己挖掘的网红", disabled=True)
+                                _do_nv_refresh = False
+                        with _b2:
+                            _do_nv_remove = st.button("🗑 移除", key=f"nvrm_{_cid}",
+                                                      use_container_width=True)
+                        with _b3:
+                            _do_nv_mail = st.button("📧 邮件", key=f"nvml_{_cid}",
+                                                    use_container_width=True)
+
+                    if _do_nv_refresh:
+                        _ok, _msg = _refresh_one_channel(_cid, _name, _cat, owner=_who)
+                        (st.success if _ok else st.error)(_msg)
+
+                    if _do_nv_mail:
+                        bd_email_dialog(_rec)
+
+                    # 移除二次确认
+                    if _do_nv_remove:
+                        st.session_state[f"_nv_del_{_cid}"] = True
+                    if st.session_state.get(f"_nv_del_{_cid}"):
+                        st.warning(f"确定要把「{_name}」从 Naver 库移除吗？")
+                        _d1, _d2, _ = st.columns([1, 1, 3])
+                        with _d1:
+                            _sure = st.button("确定移除", key=f"nvdl_ok_{_cid}", type="primary",
+                                              use_container_width=True)
+                        with _d2:
+                            _no = st.button("取消", key=f"nvdl_no_{_cid}", use_container_width=True)
+                        if _no:
+                            st.session_state.pop(f"_nv_del_{_cid}", None)
+                            st.rerun()
+                        if _sure:
+                            if _ndb:
+                                _ndb.remove(_cid)
+                            else:
+                                st.session_state.local_db_naver = [
+                                    r for r in st.session_state.local_db_naver
+                                    if r.get("channel_id") != _cid]
+                            st.session_state.pop(f"_nv_del_{_cid}", None)
+                            st.session_state["_nv_status_msg"] = f"🗑 已移除「{_name}」"
+                            st.rerun()
 
 
 # ============================================================

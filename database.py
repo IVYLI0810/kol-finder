@@ -1034,3 +1034,26 @@ class InfluencerDB:
             return True
         except Exception:
             return False
+
+# ============================================================
+# Naver 网红独立数据表（与 YouTube 的 influencers 完全分开，互不混）
+# ============================================================
+
+class NaverInfluencerDB(InfluencerDB):
+    """Naver Cafe/博客网红库：结构与 influencers 相同，单独一张表 naver_influencers。
+    所有查询/增删方法直接继承，只是表名不同。"""
+
+    TABLE_NAME = "naver_influencers"
+
+    def table_ready(self) -> tuple[bool, str]:
+        """探测 naver_influencers 表是否已在 Supabase 建好。返回 (可用?, 错误信息)。"""
+        try:
+            self.client.table(self.TABLE_NAME).select("channel_id").limit(1).execute()
+            self.last_error = None
+            return True, ""
+        except Exception as e:
+            msg = str(e)
+            if ("find the table" in msg or "does not exist" in msg
+                    or "42P01" in msg or "PGRST" in msg.upper()):
+                return False, "表还没建"
+            return False, msg
