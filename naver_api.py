@@ -22,6 +22,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 NAVER_API_BASE = "https://openapi.naver.com/v1/search"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -62,7 +64,8 @@ def _get(url: str, proxy: str = "", timeout: int = 12, headers: dict = None,
         use_proxy = FALLBACK_PROXY  # 已知直连不通，直接走代理，不浪费时间
     for attempt in range(2):
         try:
-            r = requests.get(url, headers=h, timeout=timeout, proxies=_proxies(use_proxy))
+            r = requests.get(url, headers=h, timeout=timeout, proxies=_proxies(use_proxy),
+                             verify=False)
             if r.status_code == 200:
                 if not (proxy or "").strip() and use_proxy:
                     _fallback_ok = True
@@ -100,7 +103,8 @@ def _api_search(api_type: str, query: str, client_id: str, client_secret: str,
     try:
         r = requests.get(url, params=params, timeout=15, proxies=_proxies(proxy),
                          headers={"X-Naver-Client-Id": client_id.strip(),
-                                  "X-Naver-Client-Secret": client_secret.strip()})
+                                  "X-Naver-Client-Secret": client_secret.strip()},
+                         verify=False)
     except requests.RequestException as e:
         return [], f"网络错误：{e}"
     if r.status_code == 401:
