@@ -3396,6 +3396,20 @@ with tab_naver:
     _nv_secret = st.session_state.get("naver_secret", "").strip()
     _nv_proxy = st.session_state.get("naver_proxy", "").strip()
 
+    # 网络自检：挖不到人时先点这里定位原因（线上服务器常被 Naver 拦）
+    with st.expander("🩺 网络自检：挖不到网红？先点我测一下"):
+        if st.button("🔍 测试 Naver 连接", key="nv_net_check", use_container_width=True):
+            with st.spinner("测试中（正在抓一个真实博客的邻居数）…"):
+                _chk = get_blog_stats("modubig", proxy=_nv_proxy)
+            if _chk:
+                st.success(f"✅ Naver 连接正常！测试博客邻居数抓到了：{_chk['neighbors']:,}。可以正常挖掘。")
+            else:
+                st.error("❌ 连不上 Naver：这个环境抓不到 Naver 页面。"
+                         "Naver 会拦海外/云服务器——请在**你自己电脑**上跑 kol-finder"
+                         "（终端：cd ~/Desktop/kol-finder 然后 streamlit run app.py）；"
+                         "如果已经在自己电脑上，去「⚙️ 筛选设置」的 Naver 区把代理填上 "
+                         "socks5h://127.0.0.1:13659 再试。")
+
     nv_tab_a, nv_tab_b, nv_tab_lib = st.tabs(["🔎 关键词挖掘", "📋 手动名单", "📁 Naver网红库"])
 
     with nv_tab_a:
@@ -3430,6 +3444,9 @@ with tab_naver:
             _cc = _res.get("cafe_candidates", [])
             st.markdown(f"关键词「{st.session_state.get('nv_mine_kw', '')}」：挖到 "
                         f"**{len(_bc)} 位博主**（带邻居数）+ **{len(_cc)} 位 cafe 活跃成员**")
+            if _bc and not any(c.get("neighbors_known") for c in _bc):
+                st.warning("⚠️ 邻居数全部没抓到：当前环境连不上 Naver 博客页。"
+                           "点上方「🩺 网络自检」定位原因（线上服务器会被 Naver 拦，请在自己电脑上跑）")
             _sel_b = _nv_render_candidates(_bc, _nv_lo, _nv_hi, "nvchk_a") if _bc else []
             _sel_c = _nv_render_candidates(_cc, _nv_lo, _nv_hi, "nvchk_b") if _cc else []
             if not _bc and not _cc:

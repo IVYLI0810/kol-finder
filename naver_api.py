@@ -31,6 +31,10 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
 MAX_POSTER_FETCH = 24
 MAX_BLOG_ENRICH = 30
 
+# 公司网络直连 Naver 会被拦：未手动配代理时，直连失败自动回退到这个本地代理
+FALLBACK_PROXY = "socks5h://127.0.0.1:13659"
+_fallback_ok = None  # 记住回退是否有效，有效就直接走代理，不再每次先等直连超时
+
 
 # ============================================================
 # 基础请求
@@ -43,24 +47,34 @@ def _proxies(proxy: str) -> dict | None:
     return {"http": proxy, "https": proxy}
 
 
-def _get(url: str, proxy: str = "", timeout: int = 20, headers: dict = None,
+def _get(url: str, proxy: str = "", timeout: int = 12, headers: dict = None,
          referer: str = None) -> requests.Response | None:
-    """带重试的 GET。Naver 对代理 IP 偶尔弹密码确认页，重试一次常能过。"""
+    """带重试的 GET。未配代理且直连失败时（公司网络拦 Naver），自动回退本地代理。
+    Naver 对代理 IP 偶尔弹密码确认页，重试一次常能过。"""
+    global _fallback_ok
     h = {"User-Agent": UA}
     if referer:
         h["Referer"] = referer
     if headers:
         h.update(headers)
+    use_proxy = (proxy or "").strip()
+    if not use_proxy and _fallback_ok is True:
+        use_proxy = FALLBACK_PROXY  # 已知直连不通，直接走代理，不浪费时间
     for attempt in range(2):
         try:
-            r = requests.get(url, headers=h, timeout=timeout, proxies=_proxies(proxy))
+            r = requests.get(url, headers=h, timeout=timeout, proxies=_proxies(use_proxy))
             if r.status_code == 200:
+                if not (proxy or "").strip() and use_proxy:
+                    _fallback_ok = True
                 return r
             if r.status_code in (429, 503) and attempt == 0:
                 time.sleep(1.5)
                 continue
             return r
         except requests.RequestException:
+            if not use_proxy and not (proxy or "").strip():
+                use_proxy = FALLBACK_PROXY  # 直连失败 → 自动试本地代理
+                continue
             if attempt == 0:
                 time.sleep(1.0)
     return None
