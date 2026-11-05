@@ -785,6 +785,29 @@ if "search_results" not in st.session_state:
     st.session_state.search_results = []
 if "search_log" not in st.session_state:
     st.session_state.search_log = []
+
+
+# ============================================================
+# 「搜索被打断」自检
+# ------------------------------------------------------------
+# Streamlit 的规则：你一有任何新动作（点按钮、敲字），它就把正在跑的这轮脚本
+# 掐断、从头重跑。搜索是在同一轮里跑完的，掐断时"最后才写结果"那行根本来不及执行
+# —— 这就是以前"刷一下人全没了"的根因。现在改成边跑边记账，这里负责识别：
+# 上一轮立的 _search_running 牌子如果还立着，说明上一轮就是被打断的。
+# ============================================================
+def _is_streamlit_control(exc) -> bool:
+    """区分真错误和 Streamlit 自己的"打断重跑"信号：后者必须原样抛出，
+    否则会被 try/except 吞掉，页面重跑机制就坏了。"""
+    for _k in type(exc).__mro__:
+        if "ScriptControl" in _k.__name__ or _k.__name__ in (
+                "RerunException", "StopException", "StopExceptionScriptControl"):
+            return True
+    return False
+
+
+if st.session_state.get("_search_running"):
+    st.session_state._search_interrupted = True
+st.session_state.pop("_search_running", None)
 if "config" not in st.session_state:
     st.session_state.config = DEFAULT_CONFIG.copy()
 if "user_name" not in st.session_state:
@@ -936,7 +959,7 @@ def _get_nv_lib_records(force: bool = False) -> list:
     return recs
 
 
-def _nv_table_guidance():
+def _nv_table_guidance(tag: str = "top"):
     """Naver 独立表还没建时的引导提示"""
     st.warning("⚠️ Naver 网红的数据表还没建（只需建一次，和 YouTube 库完全分开）")
     with st.expander("📖 点我看建表步骤（2 分钟）"):
@@ -949,7 +972,9 @@ def _nv_table_guidance():
 """)
         st.code(NAVER_TABLE_SQL, language="sql")
         st.markdown("看到绿色 **Success** 就好了。")
-    if st.button("✅ 我建好表了，点这里刷新", key="nv_tbl_recheck"):
+    # key 必须带 tag：这个提示会在同一轮里出现两次（Naver 挖掘页 + Naver 库页），
+    # 用固定 key 会直接抛 StreamlitDuplicateElementKey 整页报错
+    if st.button("✅ 我建好表了，点这里刷新", key=f"nv_tbl_recheck_{tag}"):
         st.session_state.pop("_nv_tbl_ready", None)
         st.session_state.pop("_nv_tbl_probe_ts", None)
         st.session_state.pop("_nv_lib_cache", None)
@@ -1604,33 +1629,45 @@ with st.sidebar:
         st.session_state.api_key = _stored_key
         st.session_state.quota = QuotaTracker()
 
-    api_key_input = st.text_input(
-        "API Key", value=st.session_state.api_key, type="password",
-        label_visibility="collapsed",
-        help="Google Cloud Console 获取，免费10,000 units/天。点「记住」后只存在你自己浏览器，刷新不用重填。",
-        placeholder="粘贴你的 YouTube API Key",
-    )
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
-        st.session_state.quota = QuotaTracker()
+    # 粘贴 Key 不再每敲一个字就把整页重演一遍：输入框和按钮包进表单，点一下才生效
+    with st.form("yt_key_form", clear_on_submit=False):
+        api_key_input = st.text_input(
+            "API Key", value=st.session_state.api_key, type="password",
+            label_visibility="collapsed", key="yt_key_input",
+            help="Google Cloud Console 获取，免费10,000 units/天。粘贴完点下面「应用」或「记住」才生效。",
+            placeholder="粘贴你的 YouTube API Key",
+        )
+        _c_apply, _c_remember, _c_forget = st.columns([1, 1, 1])
+        with _c_apply:
+            _yt_apply = st.form_submit_button(
+                "✅ 应用", use_container_width=True,
+                help="本次生效（不存进浏览器）。以前是边打字边自动生效，页面会一直闪，现在要点一下")
+        with _c_remember:
+            _yt_remember = st.form_submit_button(
+                "🔒 记住", use_container_width=True,
+                help="应用 + 存进你自己电脑的浏览器，刷新不用重填。不上传服务器")
+        with _c_forget:
+            _yt_forget = st.form_submit_button(
+                "🗑 忘掉", use_container_width=True,
+                help="把这个浏览器里记住的 Key 清掉")
 
-    _c_remember, _c_forget = st.columns([1, 1])
-    with _c_remember:
-        if st.button("记住", key="remember_key", use_container_width=True,
-                     help="把 Key 存进你自己电脑的浏览器，刷新不用重填。不上传服务器。"):
-            if api_key_input.strip():
-                _ls.setItem("yt_api_key", api_key_input.strip(), key="do_remember")
-                st.success("✅ 已记住，以后刷新自动填好")
-            else:
-                st.warning("先粘贴 Key 再点记住哦")
-    with _c_forget:
-        if st.button("忘掉", key="forget_key", use_container_width=True,
-                     help="把这个浏览器里记住的 Key 清掉"):
-            _ls.deleteItem("yt_api_key", key="do_forget")
-            st.session_state.api_key = ""
+    # 下面这些刻意留在表单外：浏览器记忆组件进表单会有读写时序问题
+    if _yt_apply or _yt_remember:
+        if api_key_input.strip():
+            st.session_state.api_key = api_key_input.strip()
             st.session_state.quota = QuotaTracker()
-            st.warning("已忘掉，下次要重新粘贴")
-    st.caption("🔒 Key 只存在你自己浏览器，不上传服务器，全队互不影响")
+            st.success("✅ Key 已应用，可以开始搜索了")
+            if _yt_remember:
+                _ls.setItem("yt_api_key", api_key_input.strip(), key="do_remember")
+                st.success("✅ 已记住，以后打开自动填好")
+        else:
+            st.warning("先粘贴 Key 再点哦")
+    if _yt_forget:
+        _ls.deleteItem("yt_api_key", key="do_forget")
+        st.session_state.api_key = ""
+        st.session_state.quota = QuotaTracker()
+        st.warning("已忘掉，下次要重新粘贴")
+    st.caption("🔒 Key 只存在你自己浏览器，不上传服务器，全队互不影响 · 粘贴完记得点「应用」或「记住」")
 
     # ---------- 如何获取 API Key：点击展开看步骤 ----------
     with st.expander("📖 如何获取 API Key？（点我看步骤）"):
@@ -1658,46 +1695,56 @@ with st.sidebar:
     if not st.session_state.naver_proxy:
         st.session_state.naver_proxy = _ls_nv.getItem("nv_proxy") or ""
 
-    _nv_id_in = st.text_input(
-        "Client ID", value=st.session_state.naver_id, type="password",
-        key="nv_id_input", placeholder="粘贴 Naver Client ID",
-        help="developers.naver.com 免费申请，「Cafe/博客挖掘」tab 用")
-    _nv_secret_in = st.text_input(
-        "Client Secret", value=st.session_state.naver_secret, type="password",
-        key="nv_secret_input", placeholder="粘贴 Naver Client Secret")
-    if _nv_id_in != st.session_state.naver_id:
-        st.session_state.naver_id = _nv_id_in
-    if _nv_secret_in != st.session_state.naver_secret:
-        st.session_state.naver_secret = _nv_secret_in
+    # 三个输入框包进表单：粘贴 Naver Key 不再每敲一个字整页重演一次
+    with st.form("nv_key_form", clear_on_submit=False):
+        _nv_id_in = st.text_input(
+            "Client ID", value=st.session_state.naver_id, type="password",
+            key="nv_id_input", placeholder="粘贴 Naver Client ID",
+            help="developers.naver.com 免费申请，「Cafe/博客挖掘」tab 用")
+        _nv_secret_in = st.text_input(
+            "Client Secret", value=st.session_state.naver_secret, type="password",
+            key="nv_secret_input", placeholder="粘贴 Naver Client Secret")
+        _nv_proxy_in = st.text_input(
+            "代理（可选，一般留空）", value=st.session_state.naver_proxy,
+            key="nv_proxy_input", placeholder="例：socks5h://127.0.0.1:13659",
+            help="只有公司网络打不开 Naver 时才需要填；线上网站直接能连，留空即可")
+        _cn_apply, _cn_remember, _cn_forget = st.columns([1, 1, 1])
+        with _cn_apply:
+            _nv_apply = st.form_submit_button(
+                "✅ 应用", use_container_width=True,
+                help="本次生效（不存进浏览器）")
+        with _cn_remember:
+            _nv_remember = st.form_submit_button(
+                "🔒 记住", use_container_width=True,
+                help="应用 + 存进你自己电脑的浏览器，刷新不用重填。不上传服务器")
+        with _cn_forget:
+            _nv_forget = st.form_submit_button(
+                "🗑 忘掉", use_container_width=True,
+                help="把这个浏览器里记住的 Naver Key 清掉")
 
-    _nv_proxy_in = st.text_input(
-        "代理（可选，一般留空）", value=st.session_state.naver_proxy,
-        key="nv_proxy_input", placeholder="例：socks5h://127.0.0.1:13659",
-        help="只有公司网络打不开 Naver 时才需要填；线上网站直接能连，留空即可")
-    if _nv_proxy_in != st.session_state.naver_proxy:
-        st.session_state.naver_proxy = _nv_proxy_in
-
-    _cn_remember, _cn_forget = st.columns([1, 1])
-    with _cn_remember:
-        if st.button("记住", key="nv_remember_key", use_container_width=True,
-                     help="存进你自己电脑的浏览器，刷新不用重填。不上传服务器。"):
-            if _nv_id_in.strip() and _nv_secret_in.strip():
+    # 浏览器记忆组件留在表单外，避免读写时序问题
+    if _nv_apply or _nv_remember:
+        if _nv_id_in.strip() and _nv_secret_in.strip():
+            st.session_state.naver_id = _nv_id_in.strip()
+            st.session_state.naver_secret = _nv_secret_in.strip()
+            st.session_state.naver_proxy = _nv_proxy_in.strip()
+            st.success("✅ Naver Key 已应用")
+            if _nv_remember:
                 _ls_nv.setItem("nv_client_id", _nv_id_in.strip(), key="nv_do_remember1")
                 _ls_nv.setItem("nv_client_secret", _nv_secret_in.strip(), key="nv_do_remember2")
                 _ls_nv.setItem("nv_proxy", _nv_proxy_in.strip(), key="nv_do_remember3")
                 st.success("✅ 已记住，以后刷新自动填好")
-            else:
-                st.warning("先把 Client ID 和 Secret 都粘贴好再点记住哦")
-    with _cn_forget:
-        if st.button("忘掉", key="nv_forget_key", use_container_width=True):
-            _ls_nv.deleteItem("nv_client_id", key="nv_do_forget1")
-            _ls_nv.deleteItem("nv_client_secret", key="nv_do_forget2")
-            _ls_nv.deleteItem("nv_proxy", key="nv_do_forget3")
-            st.session_state.naver_id = ""
-            st.session_state.naver_secret = ""
-            st.session_state.naver_proxy = ""
-            st.warning("已忘掉，下次要重新粘贴")
-    st.caption("🔒 Key 只存在你自己浏览器，不上传服务器 · 免费 25,000 次/天")
+        else:
+            st.warning("先把 Client ID 和 Secret 都粘贴好再点哦")
+    if _nv_forget:
+        _ls_nv.deleteItem("nv_client_id", key="nv_do_forget1")
+        _ls_nv.deleteItem("nv_client_secret", key="nv_do_forget2")
+        _ls_nv.deleteItem("nv_proxy", key="nv_do_forget3")
+        st.session_state.naver_id = ""
+        st.session_state.naver_secret = ""
+        st.session_state.naver_proxy = ""
+        st.warning("已忘掉，下次要重新粘贴")
+    st.caption("🔒 Key 只存在你自己浏览器，不上传服务器 · 免费 25,000 次/天 · 粘贴完记得点「应用」或「记住」")
 
     with st.expander("📖 如何申请 Naver Key？（免费，点我看步骤）"):
         st.markdown("""
@@ -1850,31 +1897,36 @@ with tab_search:
                             st.session_state.pending_kw = kw
         st.markdown("")
 
-        # ---------- 搜索模式：按时间（小博主多）/ 按相关性（更对口） ----------
+        # ---------- 搜索模式 + 关键词 ----------
+        # 整块包进 st.form：打字、切换模式都只改浏览器里的草稿，
+        # 必须点「搜索」或「批量」才提交 → 页面不再每敲一个字就重演一遍。
         if "search_order" not in st.session_state:
             st.session_state.search_order = "🕐 按时间（新视频优先，小博主更多）"
-        order_choice = st.radio(
-            "搜索模式",
-            ["🕐 按时间（新视频优先，小博主更多）", "🎯 按相关性（内容更对口）"],
-            index=0 if st.session_state.search_order.startswith("🕐") else 1,
-            horizontal=True,
-            help=f"按时间：搜最近 {st.session_state.config.get('window_days', 60)} 天的新视频，活跃小博主更容易被挖到；按相关性：搜最匹配的视频，内容更精准但大频道偏多。两种配额消耗相同。",
-        )
+        with st.form("search_form", clear_on_submit=False):
+            order_choice = st.radio(
+                "搜索模式",
+                ["🕐 按时间（新视频优先，小博主更多）", "🎯 按相关性（内容更对口）"],
+                index=0 if st.session_state.search_order.startswith("🕐") else 1,
+                horizontal=True,
+                key="search_mode_radio",
+                help=f"按时间：搜最近 {st.session_state.config.get('window_days', 60)} 天的新视频，活跃小博主更容易被挖到；按相关性：搜最匹配的视频，内容更精准但大频道偏多。两种配额消耗相同。",
+            )
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                keyword_input = st.text_input(
+                    "搜索关键词", placeholder="也可以输入自定义关键词，例：자취방 꾸미기 가성비",
+                    label_visibility="collapsed", key="keyword_input",
+                )
+            with col2:
+                search_btn = st.form_submit_button(
+                    "🔍 搜索", use_container_width=True,
+                    help="输入完点这里（或按回车）才开始搜；打字过程中页面不会再重演")
+            with col3:
+                batch_btn = st.form_submit_button(
+                    "⚡ 批量", use_container_width=True,
+                    help="有AI生成的关键词时，把生成的一组全挖一遍；没有则挖全部预置关键词（配额消耗大，建议配额充足时用）")
         st.session_state.search_order = order_choice
         search_order_api = "date" if order_choice.startswith("🕐") else "relevance"
-
-        # ---------- 自定义关键词 ----------
-        col1, col2, col3 = st.columns([3, 1, 1])
-        with col1:
-            keyword_input = st.text_input(
-                "搜索关键词", placeholder="也可以输入自定义关键词，例：자취방 꾸미기 가성비",
-                label_visibility="collapsed",
-            )
-        with col2:
-            search_btn = st.button("🔍 搜索", use_container_width=True)
-        with col3:
-            batch_btn = st.button("⚡ 批量", use_container_width=True,
-                                  help="有AI生成的关键词时，把生成的一组全挖一遍；没有则挖全部预置关键词（配额消耗大，建议配额充足时用）")
 
         st.markdown("")
 
@@ -1897,20 +1949,39 @@ with tab_search:
         # 单个搜索
         if search_keyword:
             st.session_state.quota.last_error = ""
+            st.session_state.pop("_search_interrupted", None)
             _status_box = st.empty()
             _status_box.info(f"🔍 正在搜索「{search_keyword}」…")
-            results = search_and_verify(
-                keyword=search_keyword,
-                api_key=st.session_state.api_key,
-                quota=st.session_state.quota,
-                config=st.session_state.config,
-                db_records=db_records,
-                order=search_order_api,
-                status_cb=lambda m: _status_box.info(f"🔍 {m}"),
-            )
+            # 边跑边记账：以前是"全跑完的最后一步才写结果"，中途被页面重演打断就一笔
+            # 都没落下，人全丢。现在每验证通过一个就立刻进账本，打断也保得住。
+            st.session_state.search_results = []
+            _live = st.session_state.search_results
+
+            def _live_add(_r, _book=_live):
+                _book.append(_r)
+
+            st.session_state._search_running = True
+            try:
+                results = search_and_verify(
+                    keyword=search_keyword,
+                    api_key=st.session_state.api_key,
+                    quota=st.session_state.quota,
+                    config=st.session_state.config,
+                    db_records=db_records,
+                    order=search_order_api,
+                    status_cb=lambda m: _status_box.info(f"🔍 {m}"),
+                    on_hit=_live_add,
+                )
+            except Exception as _e:
+                if _is_streamlit_control(_e):
+                    raise
+                results = _live
+                st.error(f"❌ 搜索中途出错（已经挖到的 {len(_live)} 人帮你保住了）："
+                         f"{type(_e).__name__}: {_e}")
             # 第二期：挖完交给 AI 定垂类、打相关度、出标签，再按新权重重排
             _ai_note = _enrich_with_ai(results, _status_box) if results else ""
             st.session_state.search_results = results
+            st.session_state._search_running = False
             st.session_state.search_log.append({
                 "keyword": search_keyword,
                 "time": datetime.now().strftime("%H:%M"), "results": len(results),
@@ -1935,48 +2006,61 @@ with tab_search:
             else:
                 keywords = [kw for kws in KW_LIB.values() for kw in kws]
                 _batch_desc = f"全部预置关键词 {len(keywords)} 个"
-            all_results = []
             errors_seen = []
             st.session_state.quota.last_error = ""
+            st.session_state.pop("_search_interrupted", None)
             # 每个关键词的成本 = 搜索成本（翻页/Shorts/双排序）+ 验证缓冲（约50频道×3）
             per_kw_cost = estimate_search_cost(st.session_state.config) + 150
             progress = st.progress(0)
             status_text = st.empty()
             status_text.info(f"⚡ 开始批量挖掘：{_batch_desc}")
 
+            # 边跑边记账：每挖到一个人立刻进结果账本（跨关键词自动去重）。
+            # 中途被页面重演打断、或某个关键词报错，前面已经挖到的人都还在。
+            st.session_state.search_results = []
+            _blive = st.session_state.search_results
+            _bseen = set()
+
+            def _b_add(_r, _book=_blive, _ids=_bseen):
+                _cid = _r.get("channel_id")
+                if not _cid or _cid in _ids:
+                    return
+                _ids.add(_cid)
+                _book.append(_r)
+
+            st.session_state._search_running = True
             for i, kw in enumerate(keywords):
                 if not st.session_state.quota.can_afford(per_kw_cost):
                     status_text.warning(f"⚠️ 配额不足，已完成 {i}/{len(keywords)}，剩余关键词先跳过")
                     break
-                status_text.info(f"🔍 搜索中 ({i + 1}/{len(keywords)}): {kw} · 已找到 {len(all_results)} 人")
-                results = search_and_verify(
-                    keyword=kw,
-                    api_key=st.session_state.api_key,
-                    quota=st.session_state.quota,
-                    config=st.session_state.config,
-                    db_records=db_records,
-                    order=search_order_api,
-                    status_cb=lambda m, _i=i, _kw=kw: status_text.info(
-                        f"({_i + 1}/{len(keywords)} · {_kw}) {m}"),
-                )
+                status_text.info(f"🔍 搜索中 ({i + 1}/{len(keywords)}): {kw} · 已找到 {len(_blive)} 人")
+                try:
+                    search_and_verify(
+                        keyword=kw,
+                        api_key=st.session_state.api_key,
+                        quota=st.session_state.quota,
+                        config=st.session_state.config,
+                        db_records=db_records,
+                        order=search_order_api,
+                        status_cb=lambda m, _i=i, _kw=kw: status_text.info(
+                            f"({_i + 1}/{len(keywords)} · {_kw}) {m}"),
+                        on_hit=_b_add,
+                    )
+                except Exception as _e:
+                    if _is_streamlit_control(_e):
+                        raise
+                    errors_seen.append(f"{kw}：{type(_e).__name__}")
                 if st.session_state.quota.last_error:
                     if st.session_state.quota.last_error not in errors_seen:
                         errors_seen.append(st.session_state.quota.last_error)
                     st.session_state.quota.last_error = ""
-                all_results.extend(results)
                 progress.progress((i + 1) / len(keywords))
 
-            # 去重
-            seen = set()
-            unique = []
-            for r in all_results:
-                if r["channel_id"] not in seen:
-                    seen.add(r["channel_id"])
-                    unique.append(r)
-            # 第二期：合并后统一交给 AI 分析，再按新权重重排
-            _ai_note_batch = _enrich_with_ai(unique, status_text) if unique else ""
-            st.session_state.search_results = unique
-            status_text.success(f"✅ 批量完成，共 {len(unique)} 个活跃博主")
+            # 第二期：挖完统一交给 AI 分析并按新权重重排（就地改同一本账，
+            # st.session_state.search_results 与 _blive 是同一个列表）
+            _ai_note_batch = _enrich_with_ai(_blive, status_text) if _blive else ""
+            st.session_state._search_running = False
+            status_text.success(f"✅ 批量完成，共 {len(_blive)} 个活跃博主")
             if _ai_note_batch:
                 st.caption(f"🤖 {_ai_note_batch}")
             if errors_seen:
@@ -1989,6 +2073,14 @@ with tab_search:
             st.markdown("### 🎯 搜索结果")
 
             results = st.session_state.search_results
+
+            # 上一轮被掐断时给个明白话：人没丢，只是没跑完
+            if st.session_state.pop("_search_interrupted", None):
+                st.warning(
+                    f"⚠️ 上一次搜索被中途打断了（你在它跑的时候又点了别的，或者网页跟服务器断了）。"
+                    f"已经挖到的 **{len(results)}** 位都给你留着，不会丢；"
+                    f"只是剩下的关键词没跑完、AI 垂类标签可能没刷齐。"
+                    f"想接着挖：直接点「⚡ 批量」补剩下的，或者换个关键词再搜。")
 
             # 筛选（包进表单：拖动滑块/切换排序不刷新整页，点「应用筛选」才生效）
             if "res_min_score" not in st.session_state:
@@ -3229,7 +3321,7 @@ def _nv_add_selected(selected: list) -> None:
     if db:
         ready, _err = _nv_table_ready_cached()
         if not ready:
-            _nv_table_guidance()
+            _nv_table_guidance("add")
             return
     existing = _nv_existing_ids()
     fresh, dup = [], []
@@ -3377,7 +3469,7 @@ with tab_naver:
     if get_naver_db() is not None:
         _tbl_ready, _ = _nv_table_ready_cached()
         if not _tbl_ready:
-            _nv_table_guidance()
+            _nv_table_guidance("top")
 
     # 邻居数门槛：数字区间（只筛选、不打分）
     _nc1, _nc2, _nc3 = st.columns([1, 1, 2.5])
@@ -3416,25 +3508,27 @@ with tab_naver:
         if not naver_ready(_nv_id, _nv_secret):
             st.info("👈 关键词挖掘需要 Naver API Key：在「⚙️ 筛选设置」页填入（附免费申请步骤）。"
                     "没有 Key 也可以先用右边的「📋 手动名单」直接贴博客链接。")
-        _nv_kw = st.text_input("韩语关键词", key="nv_kw",
-                               placeholder="例：자취방 꾸미기 가성비 / 원룸 수납 / 리뷰 체험단 …")
-        if st.button("🔍 开始挖掘", key="nv_search_btn", use_container_width=True):
-            if not naver_ready(_nv_id, _nv_secret):
-                st.warning("请先填 Naver Client ID / Secret（顶部 ⚙️ 筛选设置页）")
-            elif not _nv_kw.strip():
-                st.warning("先输入关键词")
-            else:
-                _box = st.empty()
-                with st.spinner("挖掘中：搜帖子 → 识别发帖人 → 查邻居数…"):
-                    try:
-                        _res = mine_by_keyword(_nv_kw.strip(), _nv_id, _nv_secret,
-                                               proxy=_nv_proxy,
-                                               progress_cb=lambda m: _box.info(f"🔍 {m}"))
-                        st.session_state.nv_mine = _res
-                        st.session_state.nv_mine_kw = _nv_kw.strip()
-                    except Exception as _e:
-                        st.error(f"挖掘出错：{type(_e).__name__}: {_e}")
-                _box.empty()
+        # 关键词输入包进表单：打字时不再整页重演，点「开始挖掘」才跑
+        with st.form("nv_mine_form", clear_on_submit=False):
+            _nv_kw = st.text_input("韩语关键词", key="nv_kw",
+                                   placeholder="例：자취방 꾸미기 가성비 / 원룸 수납 / 리뷰 체험단 …")
+            if st.form_submit_button("🔍 开始挖掘", key="nv_search_btn", use_container_width=True):
+                if not naver_ready(_nv_id, _nv_secret):
+                    st.warning("请先填 Naver Client ID / Secret（顶部 ⚙️ 筛选设置页）")
+                elif not _nv_kw.strip():
+                    st.warning("先输入关键词")
+                else:
+                    _box = st.empty()
+                    with st.spinner("挖掘中：搜帖子 → 识别发帖人 → 查邻居数…"):
+                        try:
+                            _res = mine_by_keyword(_nv_kw.strip(), _nv_id, _nv_secret,
+                                                   proxy=_nv_proxy,
+                                                   progress_cb=lambda m: _box.info(f"🔍 {m}"))
+                            st.session_state.nv_mine = _res
+                            st.session_state.nv_mine_kw = _nv_kw.strip()
+                        except Exception as _e:
+                            st.error(f"挖掘出错：{type(_e).__name__}: {_e}")
+                    _box.empty()
 
         _res = st.session_state.get("nv_mine")
         if _res:
@@ -3514,7 +3608,7 @@ with tab_naver:
             if _ready2:
                 _nv_records = _get_nv_lib_records()
             else:
-                _nv_table_guidance()
+                _nv_table_guidance("lib")
         else:
             _nv_records = list(st.session_state.local_db_naver)
 
