@@ -1104,11 +1104,15 @@ def _merge_videos(base: list[dict], extra: list[dict]) -> list[dict]:
 
 def search_and_verify(keyword: str, api_key: str, quota: QuotaTracker,
                       config: dict = None, db_records: list[dict] = None,
-                      order: str = "date", status_cb=None) -> list[dict]:
+                      order: str = "date", status_cb=None,
+                      on_hit=None) -> list[dict]:
     """
     完整流程：搜索（可翻页+Shorts专项+双排序）→ 提取频道 → 去重 → 验证 → 评分
     order: "date" 按时间（小博主更多）/ "relevance" 按相关性（更对口）
     status_cb: 可选回调 status_cb(str)，把进度实时传给界面显示
+    on_hit: 可选回调 on_hit(dict)，每验证通过一个博主立刻单独交出去
+            （界面层用它的目的是「边跑边记账」：搜索被中途打断时，
+              已经挖到的人不会跟着一起丢）
 
     第二期起：不再需要人工指定垂类——这里先按中性相关度打分，
     界面层会用 AI 重新分析垂类/相关度并刷新评分。
@@ -1196,6 +1200,12 @@ def search_and_verify(keyword: str, api_key: str, quota: QuotaTracker,
             result["search_keyword"] = keyword
             result["category"] = ""  # 垂类由 AI 在界面层回填
             verified.append(result)
+            # 边跑边交账：界面层立刻记下这个人，中途被打断也不会丢
+            if on_hit:
+                try:
+                    on_hit(result)
+                except Exception:
+                    pass
 
     # 按总分排序
     verified.sort(key=lambda x: x["scores"]["total"], reverse=True)
