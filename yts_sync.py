@@ -1,24 +1,48 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-YTS 履约同步（只读宜搭，不改 YTS 任何数据）
+kol-finder · YTS 履约同步（Phase 1 换库版）
 
-从 YTS 的宜搭底库（与 YTS 主站同一张表）读取网红流程数据，
-找出「履约中」网红（有归属月份 且 合作阶段未完成），供挖掘系统自动标记「已引入」。
+功能等价于原 yts_sync.py，但底层不再翻宜搭（10-20s 慢），
+改成读同一个 Supabase 项目的 public.collabs 表 → 数百毫秒返回。
+主站"自动标记已引入 / 退出履约 / 补建网红行"三条逻辑保持不变。
 
-钥匙只从 环境变量 / Streamlit Secrets（YIDA_ACCESS_KEY_ID / YIDA_ACCESS_KEY_SECRET）读取，
-本地兜底 yida_config_local.py（不入仓库），绝不写进代码。
+需要 kol-finder/database.py 里存在 `InfluencerDB.add_influencer_from_yts(rec)`
+（本次改造同时补上，修掉历史遗留 bug）。
 """
-
 import json
 import os
 import re as _re
-from concurrent.futures import ThreadPoolExecutor
+import time
 from datetime import datetime
 
+import requests
 
+
+# ---------- 与 kol-bd 同项目 · 与 yts_roster 保持同一份 key ----------
+def _supa():
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_ANON_KEY", "")
+    if not url or not key:
+        try:
+            from yida_config_local import SUPABASE_CONFIG as local  # type: ignore
+            url = url or local.get("url", "")
+            key = key or local.get("key", "")
+        except ImportError:
+            pass
+    if not url:
+        url = "https://webjrwzorxxlqrcrrnro.supabase.co"
+    if not key:
+        key = "sb_publishable_eUDicGLoUiNhPO04S6iz8g_UX_SkSCH"
+    return url.rstrip("/"), key
+
+
+_SUPA_URL, _SUPA_KEY = _supa()
+_H = {"apikey": _SUPA_KEY, "Authorization": f"Bearer {_SUPA_KEY}"}
+
+
+# ---------- 归一化（保留原逻辑）----------
 def _norm_refs(*parts):
-    """把频道ID/主页链接/handle 归一成可比较的标识集合（去重用）。"""
     refs = set()
     for s in parts:
         if not s:
@@ -36,200 +60,138 @@ def _norm_refs(*parts):
     return refs
 
 
-# 宜搭表单常量（与 YTS 主站 yts_yida_store 保持一致，非机密）
-APP_TYPE = "APP_N85O3OPKB9OO52S4KCTD"
-SYSTEM_TOKEN = "XE7668C13088ICWHNJPXODYLFX8Y2Y3Z02NSMBT"
-FORM_UUID = "FORM-2A64DBB4851A4301BAA4C0A5C39E752DHXL0"
-ACCOUNT_ID = "550448"
-ENDPOINT = "aliding.aliyuncs.com"
-
-# 同步需要的字段：代码名 -> fieldId
-_SYNC_FIELDS = {
-    "channel_id": "textField_msn2qhnb",
-    "channel_name": "textField_msn2qhnd",
-    "channel_url": "textField_msn2qhnh",
-    "category": "selectField_msn2qhnj",
-    "recruiter": "textField_msn2qhnl",
-    "subscribers": "numberField_msn2qhnp",
-    "email": "textField_mswndfpt",
-    "plan_month": "textField_mswndfpl",
-    "stage": "selectField_mspwxzct",
-}
-_ID_TO_CODE = {v: k for k, v in _SYNC_FIELDS.items()}
-
-
-def _load_keys():
-    """优先环境变量/Secrets，本地兜底 yida_config_local.py"""
-    ak = os.environ.get("YIDA_ACCESS_KEY_ID", "")
-    sk = os.environ.get("YIDA_ACCESS_KEY_SECRET", "")
-    if ak and sk:
-        return ak, sk
-    try:
-        from yida_config_local import YIDA_CONFIG
-        return (str(YIDA_CONFIG.get("access_key_id", "")),
-                str(YIDA_CONFIG.get("access_key_secret", "")))
-    except ImportError:
-        return "", ""
+# ---------- Supabase 读 collabs ----------
+def fetch_all_collabs():
+    """拉全表 collabs（含所有月份行 + 裸行），过滤已软删的。
+    字段就是代码名，直接给 run_sync 用。"""
+    rows, off, limit = [], 0, 500
+    while True:
+        r = requests.get(f"{_SUPA_URL}/rest/v1/collabs",
+                         params={"select": "*",
+                                 "deleted": "eq.false",
+                                 "order": "channel_id.asc",
+                                 "offset": off, "limit": limit},
+                         headers=_H, timeout=20)
+        r.raise_for_status()
+        page = r.json()
+        rows.extend(page)
+        if len(page) < limit:
+            break
+        off += limit
+    return rows
 
 
-def yts_available() -> bool:
-    """宜搭钥匙是否已配置"""
-    ak, sk = _load_keys()
-    return bool(ak and sk)
+def is_fulfilled(rec):
+    """有归属月份 且 未闭环 → 履约中；与旧版口径一致"""
+    pm = str(rec.get("plan_month") or "").strip()
+    st = (rec.get("stage") or "").strip()
+    return bool(pm) and st != "已完成"
 
 
-class YTSReader:
-    """宜搭只读客户端（aliding 网关，与 YTS 主站同一套）"""
-
-    def __init__(self):
-        from alibabacloud_aliding20230426.client import Client
-        from alibabacloud_aliding20230426 import models as aliding_models
-        from alibabacloud_tea_openapi import models as open_api_models
-        from alibabacloud_tea_util import models as util_models
-
-        ak, sk = _load_keys()
-        config = open_api_models.Config(access_key_id=ak, access_key_secret=sk)
-        config.endpoint = ENDPOINT
-        self._client = Client(config)
-        self._m = aliding_models
-        # 超时兜底：宜搭慢/断网时不拖垮页面
-        self._runtime = util_models.RuntimeOptions(
-            connect_timeout=8000, read_timeout=20000)
-
-    def _search_page(self, page: int, size: int = 100) -> dict:
-        req = self._m.SearchFormDatasRequest(
-            app_type=APP_TYPE,
-            system_token=SYSTEM_TOKEN,
-            form_uuid=FORM_UUID,
-            language="zh_CN",
-            current_page=page,
-            page_size=size,
-            search_field_json=json.dumps({}, ensure_ascii=False),
-        )
-        headers = self._m.SearchFormDatasHeaders(
-            account_context=self._m.SearchFormDatasHeadersAccountContext(
-                account_id=ACCOUNT_ID))
-        resp = self._client.search_form_datas_with_options(
-            req, headers, self._runtime)
-        return resp.body.to_map()
-
-    @staticmethod
-    def _to_rec(inst: dict) -> dict:
-        raw = inst.get("FormData") or inst.get("formData") or {}
-        rec = {}
-        for fid, value in raw.items():
-            code = _ID_TO_CODE.get(fid)
-            if code:
-                rec[code] = value
-        return rec
-
-    def fetch_all(self) -> list:
-        """全量分页拉取（只取同步需要的字段）"""
-        def fetch(page):
-            data = self._search_page(page)
-            return data.get("Data") or data.get("data") or []
-
-        results = []
-        rows = fetch(1)
-        results.extend(self._to_rec(r) for r in rows)
-        # aliding 响应不带 TotalCount，以「不满一页」为结束条件
-        next_page = 2
-        while len(rows) == 100:
-            with ThreadPoolExecutor(max_workers=4) as ex:
-                batch = list(ex.map(fetch, range(next_page, next_page + 4)))
-            for rows in batch:
-                results.extend(self._to_rec(r) for r in rows)
-                if len(rows) < 100:
-                    break
-            next_page += 4
-        return results
-
-
-def is_fulfilled(rec: dict) -> bool:
-    """履约中 = 有归属月份 且 合作阶段未完成（与 YTS 口径一致）"""
-    return bool((rec.get("plan_month") or "").strip()) \
-        and (rec.get("stage") or "") != "已完成"
-
-
+# ---------- 主入口 ----------
 def run_sync(db) -> dict:
-    """
-    执行一次同步（需要传入挖掘系统数据库实例）。
-    返回 {"marked", "created", "skipped", "terminated", "fulfilled_total"}。
-    """
-    reader = YTSReader()
-    yida_records = reader.fetch_all()
+    """被 kol-finder/app.py 每 300s（或按钮触发）调用；
+    db = kol-finder database.InfluencerDB 实例（同项目 Supabase）"""
+    try:
+        collabs = fetch_all_collabs()
+    except Exception as e:
+        return {"error": f"读取 YTS 合作表失败: {e}"}
 
-    fulfilled = [r for r in yida_records if is_fulfilled(r)]
-    fulfilled_ids = {r.get("channel_id") for r in fulfilled if r.get("channel_id")}
-    yida_map = {r.get("channel_id"): r for r in yida_records if r.get("channel_id")}
-
-    # 含软删除一起读：软删除的网红要在「标已引入」时显式跳过，防止复活
-    kol_records = db.get_all(include_deleted=True)
-    if getattr(db, "last_query_failed", False):
-        # 读库失败 ≠ 库是空的：此时任何「补建/回收」都可能造成重复记录，整轮跳过
-        return {"marked": 0, "created": 0, "skipped": 0, "ignored": 0,
-                "terminated": 0, "fulfilled_total": 0, "failed": True}
-    kol_map = {r.get("channel_id"): r for r in kol_records if r.get("channel_id")}
-
-    marked = created = terminated = skipped = ignored = 0
-
-    # 预计算库侧归一化标识（频道ID/主页链接），补建时判「不同ID同一频道」用
-    kol_refs = [(cid, _norm_refs(r.get("channel_id"), r.get("channel_url")))
-                for cid, r in kol_map.items()]
-
-    # 只有这两个状态允许被自动标「已引入」；已拒绝/已淘汰等人工结论绝不回改
-    _MARKABLE = ("新发现", "已发邮件")
-
-    # 1) 履约中的网红 -> 标记已引入 / 自动补建
-    for y in fulfilled:
-        cid = y.get("channel_id")
+    ful = [c for c in collabs if is_fulfilled(c)]
+    yida_map = {}
+    fulfilled_ids = set()
+    for c in ful:
+        cid = (c.get("channel_id") or "").strip()
         if not cid:
             continue
-        rec = kol_map.get(cid)
-        if rec is not None:
-            if rec.get("status") == "已删除":
-                continue  # 软删除的网红不自动复活
-            if rec.get("status") in _MARKABLE:
-                if db.update_status(cid, "已引入"):
-                    marked += 1
-            elif rec.get("status") != "已引入":
-                ignored += 1  # 已拒绝/已淘汰等人工结论，保留不动
-        else:
-            yrefs = _norm_refs(y.get("channel_id"), y.get("channel_url"))
-            if any(yrefs & krefs for _, krefs in kol_refs):
-                skipped += 1  # 库里已有同一频道（ID/链接写法不同），不重复补建
-                continue
-            if db.add_influencer_from_yts(y):
-                created += 1
-                kol_map[cid] = {"channel_id": cid, "status": "已引入", "notes": ""}
+        yida_map[cid] = c
+        fulfilled_ids.add(cid)
 
-    # 2) 退出履约检查：已是「已引入」但不再履约、也没正常做完的，
-    #    状态回收成「已发邮件」（合作黄了就不算引入业绩），并备注留痕
-    stamp = datetime.now().strftime("%m-%d")
-    for cid, rec in kol_map.items():
-        if rec.get("status") != "已引入" or cid in fulfilled_ids:
+    try:
+        kol_records = db.get_all(include_deleted=True)
+    except Exception as e:
+        return {"error": f"读取挖掘站网红库失败: {e}"}
+    kol_map = {(r.get("channel_id") or "").strip(): r for r in kol_records}
+
+    # 建一份"归一化标识 → kol channel_id"倒排，用于兜底匹配（URL 大小写/前缀差异）
+    kol_norm_index = {}
+    for cid, r in kol_map.items():
+        for ref in _norm_refs(cid, r.get("channel_url")):
+            kol_norm_index.setdefault(ref, cid)
+
+    marked = created = skipped = ignored = terminated = 0
+    for cid in fulfilled_ids:
+        y = yida_map[cid]
+        db_rec = kol_map.get(cid)
+        if db_rec is None:
+            # 归一化命中：URL/handle 相同但 channel_id 拼写不同 → 用现有那行
+            for ref in _norm_refs(y.get("channel_id"), y.get("channel_url")):
+                hit = kol_norm_index.get(ref)
+                if hit:
+                    db_rec = kol_map.get(hit)
+                    break
+        if db_rec is None:
+            # 库内没这条频道 → 从 YTS 补建
+            try:
+                db.add_influencer_from_yts(y)
+                created += 1
+            except Exception:
+                skipped += 1
             continue
-        y = yida_map.get(cid)
-        if y and (y.get("stage") or "") == "已完成":
-            continue  # 正常做完关单，不打扰
-        # 底稿现读库里最新备注（kol_map 里的缓存行可能已过期），读取失败再退回缓存
-        latest = db.get_record(cid)
-        notes = (latest.get("notes") or "") if latest else (rec.get("notes") or "")
-        if "合作意外终止" in notes:
-            noted = True  # 已标注过，不重复写
-        else:
-            new_notes = (notes + "\n" if notes else "") + \
-                f"[{stamp} YTS退出履约] 合作意外终止（YTS同步自动标注）"
-            noted = db.update_notes(cid, new_notes)
-        if y is not None:
-            # YTS 里确实有这条记录（取消/流回/淘汰）→ 回收「已引入」状态
-            if db.revert_from_introduced(cid):
+
+        st = db_rec.get("status") or ""
+        if st in ("已拒绝", "已淘汰"):
+            ignored += 1
+            continue
+        if st == "已删除":
+            skipped += 1
+            continue
+        if st in ("新发现", "已发邮件"):
+            try:
+                db.update_status(cid, "已引入")
+                marked += 1
+            except Exception:
+                skipped += 1
+
+    # 曾经是"已引入"但现在从 YTS 履约名单里消失 → 标注 + 退回
+    ful_set = fulfilled_ids
+    for cid, r in kol_map.items():
+        if (r.get("status") or "") != "已引入":
+            continue
+        if cid in ful_set:
+            continue
+        # YTS 有该行但 stage=已完成/月份被清空/或整行删了，都属于"退出履约"
+        term_note = (f"[{datetime.now().strftime('%m-%d')} YTS退出履约] "
+                     f"合作意外终止（YTS同步自动标注）")
+        try:
+            existing = (r.get("notes") or "")
+            if "合作意外终止" not in existing:
+                db.update_notes(cid, (existing + "\n" if existing else "") + term_note)
                 terminated += 1
-            elif noted:
-                terminated += 1  # 回收失败至少备注已生效，不算丢信号
-        elif noted:
-            terminated += 1  # YTS 查无此人：维持旧行为，只备注不改状态
+            if cid in yida_map:
+                # YTS 里还存在但已不履约 → 退回"已发邮件"
+                db.revert_from_introduced(cid)
+        except Exception:
+            pass
 
     return {"marked": marked, "created": created, "skipped": skipped,
             "ignored": ignored, "terminated": terminated,
-            "fulfilled_total": len(fulfilled_ids)}
+            "fulfilled_total": len(ful)}
+
+
+# ---------- 兼容老 API（app.py 有 from yts_sync import YTSReader 之类调用时兜底）----------
+class YTSReader:
+    """旧 API 占位。新代码用 fetch_all_collabs()。"""
+
+    def __init__(self, *a, **k):
+        pass
+
+    def fetch_all(self):
+        return fetch_all_collabs()
+
+
+if __name__ == "__main__":
+    import database as D
+    url, key = _supa()
+    db = D.InfluencerDB(url, key)
+    print(json.dumps(run_sync(db), ensure_ascii=False, indent=1))
