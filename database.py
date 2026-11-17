@@ -448,6 +448,33 @@ class InfluencerDB:
         except Exception:
             return False
 
+    def add_influencer_from_yts(self, yts_rec: dict) -> bool:
+        """从 YTS (Supabase collabs) 记录补建一行到 influencers。
+        挖掘人 = YTS recruiter，状态直接置为"已引入"并补时间戳。
+        失败时抛异常给调用方处理（yts_sync 那边会 try/except 计数 skipped）。"""
+        if not yts_rec:
+            return False
+        cid = (yts_rec.get("channel_id") or "").strip()
+        if not cid:
+            return False
+        channel_data = {
+            "channel_id":   cid,
+            "channel_name": yts_rec.get("channel_name") or "",
+            "channel_url":  yts_rec.get("channel_url") or "",
+            "category":     yts_rec.get("category") or "",
+            "subscribers":  int(yts_rec.get("subscribers") or 0),
+            "emails":       yts_rec.get("email") or "",
+            "status":       "已引入",
+        }
+        ok = self.add_influencer(channel_data,
+                                 discovered_by=yts_rec.get("recruiter") or "")
+        if ok:
+            try:
+                self.update_status(cid, "已引入")
+            except Exception:
+                pass
+        return bool(ok)
+
     def update_last_checked(self, channel_id: str, still_active: bool, new_data: dict = None) -> bool:
         """复查后更新"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
