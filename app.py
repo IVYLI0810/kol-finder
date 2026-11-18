@@ -580,12 +580,17 @@ def _apply_status_change(rec: dict, new_status: str, reason: str = "") -> bool:
     _db = get_db()
     ok = True
     if _db:
-        ok = _db.update_status(cid, new_status)
+                ok = _db.update_status(cid, new_status)
         if ok and reason.strip():
             # 底稿现读库里最新备注（缓存行可能已过期），避免覆盖别人的并发编辑
             latest = _db.get_record(cid)
             old_notes = (latest.get("notes") or "") if latest else (rec.get("notes", "") or "")
             _db.update_notes(cid, _append_reason(old_notes, new_status, reason))
+        # Phase 2：改成「已发邮件」= 本人这次对外触达，归属当场覆盖成当前登录人
+        if ok and new_status == "已发邮件":
+            _who = (st.session_state.get("user_name") or "").strip()
+            if _who:
+                _db.stamp_recruiter(cid, _who)
     else:
         ok = False
         for lr in st.session_state.local_db:
@@ -593,6 +598,8 @@ def _apply_status_change(rec: dict, new_status: str, reason: str = "") -> bool:
                 _apply_status_date(lr, new_status)
                 if reason.strip():
                     lr["notes"] = _append_reason(lr.get("notes", "") or "", new_status, reason)
+                if new_status == "已发邮件" and (st.session_state.get("user_name") or "").strip():
+                    lr["discovered_by"] = st.session_state["user_name"]
                 ok = True
                 break
     _invalidate_lib_caches()
@@ -1416,12 +1423,19 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                      help="一步完成：加入网红库并直接标记「已发邮件」（自动记录发邮件日期，自动流入 YTS）"):
             _db_m = get_db()
             _ok_m = False
-            if _db_m:
+                        if _db_m:
                 if _db_m.exists(ch["channel_id"]):
                     # 已在库中：直接改状态（不能重复插入，会撞唯一约束）
                     _ok_m = _db_m.update_status(ch["channel_id"], "已发邮件")
+                    if _ok_m:
+                        # 已在库再发邮件：归属也覆盖成当前登录人（Phase 2）
+                        _db_m.stamp_recruiter(ch["channel_id"],
+                                              st.session_state.user_name)
                 elif _db_m.add_influencer(ch, st.session_state.user_name):
                     _ok_m = _db_m.update_status(ch["channel_id"], "已发邮件")
+                    if _ok_m:
+                        _db_m.stamp_recruiter(ch["channel_id"],
+                                              st.session_state.user_name)
             else:
                 # 本地模式：已在库则改状态，不在库则新增
                 _hit = [lr for lr in st.session_state.local_db if lr.get("channel_id") == ch["channel_id"]]
@@ -2593,12 +2607,18 @@ def _library_fragment():
                 if reason:
                     all_recs_b = get_all_records() if _db_b else st.session_state.local_db
                     rec_map_b = {r.get("channel_id", ""): r for r in all_recs_b}
-                if _db_b:
+                                if _db_b:
                     n = _db_b.batch_update_status(cids, new_status)
                     if reason:
                         for cid in cids:
                             old = (rec_map_b.get(cid, {}).get("notes", "") or "")
                             _db_b.update_notes(cid, _append_reason(old, new_status, reason))
+                    # Phase 2：批量标「已发邮件」= 本人对外触达，归属覆盖成当前登录人
+                    if new_status == "已发邮件":
+                        _who_b = (st.session_state.get("user_name") or "").strip()
+                        if _who_b:
+                            for cid in cids:
+                                _db_b.stamp_recruiter(cid, _who_b)
                 else:
                     for lr in st.session_state.local_db:
                         if lr.get("channel_id") in _batch_sel:
