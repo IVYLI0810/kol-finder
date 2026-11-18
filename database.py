@@ -475,6 +475,50 @@ class InfluencerDB:
                 pass
         return bool(ok)
 
+    def set_discovered_by(self, channel_id: str, recruiter: str) -> bool:
+        """Phase 2 回填：把 influencers.discovered_by 更新为指定挖掘人。
+        值已相同则视为成功、跳过写库。异常吞掉返回 False。"""
+        cid = (channel_id or "").strip()
+        rec = (recruiter or "").strip()
+        if not cid or not rec:
+            return False
+        try:
+            cur = self.get_record(cid)
+            if cur and (cur.get("discovered_by") or "").strip() == rec:
+                return True
+            result = (
+                self.client.table(self.TABLE_NAME)
+                .update({"discovered_by": rec}).eq("channel_id", cid).execute()
+            )
+            return len(result.data or []) >= 1
+        except Exception:
+            return False
+
+    def stamp_recruiter(self, channel_id: str, actor: str) -> bool:
+        """Phase 2「发邮件即覆盖归属」：谁发邮件，谁就是这条频道的当前归属。
+        同时刷新两处显示口径——
+          1) 本站 influencers.discovered_by = actor；
+          2) 同项目 YTS 权威表 collabs.recruiter = actor
+             （只盖未删除、且未「已完成」的行，保留已闭环合作的历史归属不动）。
+        任一失败都不抛异常，返回是否至少成功写了 collabs。"""
+        cid = (channel_id or "").strip()
+        a = (actor or "").strip()
+        if not cid or not a:
+            return False
+        self.set_discovered_by(cid, a)
+        try:
+            result = (
+                self.client.table("collabs")
+                .update({"recruiter": a})
+                .eq("channel_id", cid)
+                .eq("deleted", False)
+                .neq("stage", "已完成")
+                .execute()
+            )
+            return len(result.data or []) >= 0  # 无匹配行也算成功，交回同步兜底
+        except Exception:
+            return False
+
     def update_last_checked(self, channel_id: str, still_active: bool, new_data: dict = None) -> bool:
         """复查后更新"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
