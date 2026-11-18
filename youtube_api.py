@@ -71,11 +71,11 @@ DEFAULT_CONFIG = {
     # 每个关键词抓多少候选视频（YouTube 每页固定50条，100=翻2页，配额×2）
     "results_per_keyword": 100,
     # 搜索时间窗（近N天发布的视频）。窗口越大挖得越多，不额外花配额
-    "window_days": 60,
+    "window_days": 90,
     # Shorts 专项：额外搜一遍短视频，专捞只做 Shorts 的小博主（每词+100配额）
     "shorts_mode": True,
     # 双排序：同词按"时间+相关性"各搜一遍，挖到更多不同类型的频道（每词+100配额）
-    "dual_order": False,
+    "dual_order": True,
 }
 
 # ============================================================
@@ -1135,9 +1135,9 @@ def search_and_verify(keyword: str, api_key: str, quota: QuotaTracker,
     min_subs = config.get("min_subs", 3000)
     max_subs = config.get("max_subs", 50000)
     results_per_keyword = int(config.get("results_per_keyword", 100))
-    window_days = int(config.get("window_days", 60))
+    window_days = int(config.get("window_days", 90))
     shorts_mode = bool(config.get("shorts_mode", True))
-    dual_order = bool(config.get("dual_order", False))
+    dual_order = bool(config.get("dual_order", True))
 
     # Step 1: 搜索视频（翻页抓满配置条数）
     _say(f"正在搜索视频（最多 {results_per_keyword} 条）…")
@@ -1180,12 +1180,12 @@ def search_and_verify(keyword: str, api_key: str, quota: QuotaTracker,
         return []
 
     # Step 5: 按订阅量初筛
-    candidates = []
-    for cid, info in channels.items():
-        if min_subs <= info["subscribers"] <= max_subs:
-            if info.get("country", "") in ("KR", ""):
+        candidates = []
+        for cid, info in channels.items():
+            # 不再卡频道 country：搜索已限定 regionCode=KR＋韩语，这里只按订阅量初筛，避免误杀
+            if min_subs <= info["subscribers"] <= max_subs:
                 candidates.append(info)
-
+            
     # Step 6: 逐个验证活跃度 + 评分（全部保留，阈值分流交给界面）
     verified = []
     total = len(candidates)
