@@ -996,7 +996,7 @@ def get_all_records() -> list[dict]:
     return st.session_state.local_db
 
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def _count_records(db_url, db_key, status, category_tuple, content_category_tuple,
                    discoverer, discoverer_name, name_q):
     """带缓存的筛选计数（内部临时创建 DB 连接，避免 session_state 不可哈希问题）。
@@ -1017,7 +1017,7 @@ def _count_records(db_url, db_key, status, category_tuple, content_category_tupl
     return n, failed
 
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def _get_paginated_records(db_url, db_key, page, page_size, status, category_tuple,
                            content_category_tuple,
                            discoverer, discoverer_name, sort_by, descending, name_q):
@@ -1069,7 +1069,7 @@ def _get_dedup_records(db_url, db_key):
     return db.get_dedup_records()
 
 
-@st.cache_data(ttl=45, show_spinner=False)
+@st.cache_data(ttl=180, show_spinner=False)
 def _count_all_statuses(db_url, db_key):
     """带缓存的全状态计数：一次请求拿到 总数+各状态数量（原来要发3次请求）。
     返回 (统计dict, 是否失败)"""
@@ -1372,7 +1372,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
         </div>
         <div class="stat-grid">
             <div class="stat-pill stat-p1">📺 {ch['subscribers']:,}<span class="k">订阅数</span></div>
-            <div class="stat-pill stat-p2">👁 {ch['avg_views_30d']:,}<span class="k">30天均播</span></div>
+            <div class="stat-pill stat-p2">👁 {ch['avg_views_30d']:,}<span class="k">近10条均播</span></div>
             <div class="stat-pill stat-p3">📈 {ch['view_sub_ratio']}%<span class="k">播/订比</span></div>
             <div class="stat-pill stat-p4">🕐 {ch['last_upload_days_ago']}天前<span class="k">最近更新</span></div>
         </div>
@@ -2111,8 +2111,8 @@ with tab_search:
                     _f_score = st.slider("最低评分", 0, 100,
                                          st.session_state.res_min_score, step=5)
                 with col_f2:
-                    _f_sort = st.selectbox("排序", ["综合评分", "订阅量", "近30天均播", "最近更新"],
-                                           index=["综合评分", "订阅量", "近30天均播", "最近更新"].index(st.session_state.res_sort))
+                    _f_sort = st.selectbox("排序", ["综合评分", "订阅量", "近10条均播", "最近更新"],
+                                           index=["综合评分", "订阅量", "近10条均播", "最近更新"].index(st.session_state.res_sort))
                 with col_f3:
                     _f_apply = st.form_submit_button("应用筛选", use_container_width=True)
                 if _f_apply:
@@ -2126,7 +2126,7 @@ with tab_search:
             sort_keys = {
                 "综合评分": lambda x: x["scores"]["total"],
                 "订阅量": lambda x: x["subscribers"],
-                "近30天均播": lambda x: x["avg_views_30d"],
+                "近10条均播": lambda x: x["avg_views_30d"],
                 "最近更新": lambda x: x["last_upload"],
             }
             filtered.sort(key=sort_keys[sort_by], reverse=True)
@@ -2192,7 +2192,7 @@ with tab_search:
                             "AI相关度": ch.get("ai_relevance", "") if ch.get("ai_analyzed") else "",
                             "AI标签": " / ".join(ch.get("ai_tags", [])),
                             "订阅量": ch["subscribers"],
-                            "近30天均播": ch["avg_views_30d"], "评分": ch["scores"]["total"],
+                            "近10条均播": ch["avg_views_30d"], "评分": ch["scores"]["total"],
                             "联系邮箱": ", ".join(ch.get("emails", [])) or "未公开",
                             "有商业合作": "是" if ch.get("commercial_history", {}).get("has_commercial") else "否",
                             "最近更新": ch["last_upload"],
@@ -3171,7 +3171,7 @@ https://www.youtube.com/@handle                   ← 不写日期就按今天
             help="上次导入过的博主会按这次的标记和发邮件日期刷新；关掉则已有的不动",
         )
 
-    st.caption("导入时会自动补全和挖掘一样的数据：粉丝数、近30天播放、播订比、邮箱、评分、AI垂类（比之前稍慢一点，属正常）")
+    st.caption("导入时会自动补全和挖掘一样的数据：粉丝数、近10条均播、播订比、邮箱、评分、AI垂类（比之前稍慢一点，属正常）")
 
     if st.button("📥 开始导入", use_container_width=True):
         # 数据来源：传了Excel就用Excel，否则用粘贴的文本
