@@ -1604,7 +1604,7 @@ with st.sidebar:
         placeholder="例如：만의 或 Ivy",
         help="BD 邮件落款用这个名字（韩国博主看），不显示你的内部中文名。没填则回退到内部名。",
     )
-    if sb_sender != _cfg.get("sender_name", ""):
+    if sb_sender and sb_sender != _cfg.get("sender_name", ""):
         st.session_state.config["sender_name"] = sb_sender
 
     sb_kkt = st.text_input(
@@ -1614,7 +1614,7 @@ with st.sidebar:
         placeholder="例如：ivy_aliexpress",
         help="BD 邮件末尾附上这个 ID，方便博主加你。",
     )
-    if sb_kkt != _cfg.get("kkt_id", ""):
+    if sb_kkt and sb_kkt != _cfg.get("kkt_id", ""):
         st.session_state.config["kkt_id"] = sb_kkt
 
     if st.button("💾 保存我的BD身份", key="save_bd_id", use_container_width=True):
@@ -1812,7 +1812,16 @@ if st.session_state.user_name:
                 _merged["kkt_id"] = _personal.get("kkt_id", "")
                 # 网红库显示模式（卡片/列表）也从个人档案恢复，默认列表
                 _merged["view_mode"] = _personal.get("view_mode", "list")
-                st.session_state.config = _merged
+                                st.session_state.config = _merged
+                # 修复"BD身份记不住"：把存过的署名/卡考ID塞进侧边栏输入框的 session_state，
+                # 否则输入框早于读档建好、内存为空会无视 value= 显示空，还把 config 覆盖回空
+                _ukey_ld = st.session_state.user_name or "guest"
+                for _wk, _wv in (
+                    (f"sb_sender_{_ukey_ld}", _merged.get("sender_name", "")),
+                    (f"sb_kkt_{_ukey_ld}", _merged.get("kkt_id", "")),
+                ):
+                    if _wv and not str(st.session_state.get(_wk, "")).strip():
+                        st.session_state[_wk] = _wv
         st.session_state._settings_loaded_for = st.session_state.user_name
         # 加载完刷新一次，让侧边栏"BD邮件身份"立刻显示当前身份的值
         st.rerun()
@@ -1915,7 +1924,7 @@ with tab_search:
         # 整块包进 st.form：打字、切换模式都只改浏览器里的草稿，
         # 必须点「搜索」或「批量」才提交 → 页面不再每敲一个字就重演一遍。
         if "search_order" not in st.session_state:
-            st.session_state.search_order = "🕐 按时间（新视频优先，小博主更多）"
+            st.session_state.search_order = "🎯 按相关性（内容更对口）"
         with st.form("search_form", clear_on_submit=False):
             order_choice = st.radio(
                 "搜索模式",
@@ -3785,13 +3794,13 @@ with tab_settings:
             help="额外搜一遍短视频，专捞只做 Shorts 的小博主（每个关键词 +100 配额）",
         )
         new_dual_order = st.toggle(
-            "双排序搜索（时间＋相关性各搜一遍）", value=bool(config.get("dual_order", False)),
+            "双排序搜索（时间＋相关性各搜一遍）", value=bool(config.get("dual_order", True)),
             help="同一个词按两种排序各搜一遍，能挖到更多不同类型的频道（每个关键词 +100 配额）",
         )
         new_window = st.number_input(
             "搜索时间窗（近N天发布的视频）", min_value=7, max_value=365,
-            value=int(config.get("window_days", 60)), step=30,
-            help="窗口越大挖到的人越多，不额外花配额。60天=只看最近两个月更新的",
+            value=int(config.get("window_days", 90)), step=30,
+            help="窗口越大挖到的人越多，不额外花配额。90天=只看最近三个月更新的",
         )
         _cost_hint = estimate_search_cost({
             "results_per_keyword": new_results_per_keyword,
