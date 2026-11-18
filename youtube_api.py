@@ -869,7 +869,7 @@ def verify_channel(channel_info: dict, api_key: str, quota: QuotaTracker,
             "date": v["published_at"][:10],
         })
 
-    avg_views = int(sum(recent_views) / len(recent_views)) if recent_views else 0
+    avg_views = int(sum(all_views) / len(all_views)) if all_views else 0
     subscribers = channel_info["subscribers"]
     # 数据健康度用「近10条中位数」算播/订比：
     # 平均值容易被一条爆款拉飞，也被冷门视频拉垮；中位数才是这个频道的真实常态水平
