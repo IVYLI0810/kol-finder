@@ -580,7 +580,7 @@ def _apply_status_change(rec: dict, new_status: str, reason: str = "") -> bool:
     _db = get_db()
     ok = True
     if _db:
-                ok = _db.update_status(cid, new_status)
+        ok = _db.update_status(cid, new_status)
         if ok and reason.strip():
             # 底稿现读库里最新备注（缓存行可能已过期），避免覆盖别人的并发编辑
             latest = _db.get_record(cid)
@@ -1423,7 +1423,7 @@ def _render_result_card(ch: dict, rank: int, key_prefix: str):
                      help="一步完成：加入网红库并直接标记「已发邮件」（自动记录发邮件日期，自动流入 YTS）"):
             _db_m = get_db()
             _ok_m = False
-                        if _db_m:
+            if _db_m:
                 if _db_m.exists(ch["channel_id"]):
                     # 已在库中：直接改状态（不能重复插入，会撞唯一约束）
                     _ok_m = _db_m.update_status(ch["channel_id"], "已发邮件")
@@ -2607,7 +2607,7 @@ def _library_fragment():
                 if reason:
                     all_recs_b = get_all_records() if _db_b else st.session_state.local_db
                     rec_map_b = {r.get("channel_id", ""): r for r in all_recs_b}
-                                if _db_b:
+                if _db_b:
                     n = _db_b.batch_update_status(cids, new_status)
                     if reason:
                         for cid in cids:
