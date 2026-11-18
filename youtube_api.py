@@ -1180,11 +1180,12 @@ def search_and_verify(keyword: str, api_key: str, quota: QuotaTracker,
         return []
 
     # Step 5: 按订阅量初筛
-        candidates = []
-        for cid, info in channels.items():
-            # 不再卡频道 country：搜索已限定 regionCode=KR＋韩语，这里只按订阅量初筛，避免误杀
-            if min_subs <= info["subscribers"] <= max_subs:
-                candidates.append(info)
+    candidates = []
+    for cid, info in channels.items():
+        # 不再卡频道 country：搜索已限定 regionCode=KR＋韩语，这里只按订阅量初筛，避免误杀
+        if min_subs <= info["subscribers"] <= max_subs:
+            candidates.append(info)
+
             
     # Step 6: 逐个验证活跃度 + 评分（全部保留，阈值分流交给界面）
     verified = []
