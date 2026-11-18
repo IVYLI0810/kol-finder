@@ -284,7 +284,7 @@ COMMERCE_ALIAS = {
 DEFAULT_AI_MIN_RELEVANCE = 40
 
 # 一次 AI 调用分析多少个频道（双标签输出更长，5 个一批防截断）
-AI_BATCH_SIZE = 5
+AI_BATCH_SIZE = 10
 
 
 def ai_ready() -> bool:
