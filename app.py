@@ -1812,7 +1812,7 @@ if st.session_state.user_name:
                 _merged["kkt_id"] = _personal.get("kkt_id", "")
                 # 网红库显示模式（卡片/列表）也从个人档案恢复，默认列表
                 _merged["view_mode"] = _personal.get("view_mode", "list")
-                                st.session_state.config = _merged
+                st.session_state.config = _merged
                 # 修复"BD身份记不住"：把存过的署名/卡考ID塞进侧边栏输入框的 session_state，
                 # 否则输入框早于读档建好、内存为空会无视 value= 显示空，还把 config 覆盖回空
                 _ukey_ld = st.session_state.user_name or "guest"
