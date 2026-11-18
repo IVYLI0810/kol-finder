@@ -174,8 +174,34 @@ def run_sync(db) -> dict:
         except Exception:
             pass
 
+    # 3) Phase 2 归属回填：collabs.recruiter（YTS 权威）→ influencers.discovered_by
+    #    让挖掘站显示的挖掘人始终跟 YTS 一致（谁最后触达，两边都变谁）。
+    by_cid = {}
+    for c in collabs:
+        cid = (c.get("channel_id") or "").strip()
+        if cid:
+            by_cid.setdefault(cid, []).append(c)
+    recruited = 0
+    for cid, rows in by_cid.items():
+        cand = [x for x in rows if (x.get("recruiter") or "").strip()]
+        if not cand:
+            continue
+        active = [x for x in cand
+                  if (x.get("stage") or "").strip() != "已完成"]
+        pick_pool = active or cand
+        pick_pool.sort(key=lambda x: str(x.get("plan_month") or "").strip())
+        auth_rec = (pick_pool[-1].get("recruiter") or "").strip()
+        kol = kol_map.get(cid)
+        if kol and (kol.get("discovered_by") or "").strip() != auth_rec:
+            try:
+                if db.set_discovered_by(cid, auth_rec):
+                    recruited += 1
+            except Exception:
+                pass
+
     return {"marked": marked, "created": created, "skipped": skipped,
             "ignored": ignored, "terminated": terminated,
+            "recruited": recruited,
             "fulfilled_total": len(ful)}
 
 
